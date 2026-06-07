@@ -1,6 +1,7 @@
 using System.IO;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using VPet_Simulator.Core;
@@ -205,6 +206,39 @@ public sealed class LLMChatPlugin : MainPlugin
                     Application.Current.Dispatcher.Invoke(MW.ShowGallery);
                     break;
 
+                case "show_panel":
+                    Application.Current.Dispatcher.Invoke(() => MW.Core.Controller.ShowPanel());
+                    break;
+
+                case "reset_position":
+                    Application.Current.Dispatcher.Invoke(() => MW.Core.Controller.ResetPosition());
+                    break;
+
+                case "move_pet":
+                    ExecuteMovePetAction(action.Args);
+                    break;
+
+                case "open_better_buy":
+                    ExecuteOpenBetterBuyAction(action.Args);
+                    break;
+
+                case "buy_and_use":
+                case "buy_food":
+                    ExecuteBuyAndUseAction(action.Args);
+                    break;
+
+                case "feed_by_name":
+                    if (TryReadString(action.Args, "name", out var foodName))
+                    {
+                        Application.Current.Dispatcher.Invoke(() => FeedByName(foodName));
+                    }
+                    break;
+
+                case "read_status":
+                    Application.Current.Dispatcher.Invoke(() =>
+                        MW.Main.SayRnd(BuildBriefStatusSummary(), true, "LLM Chat"));
+                    break;
+
                 case "set_zoom":
                     if (TryReadDouble(action.Args, "level", out var zoomLevel))
                     {
@@ -225,6 +259,312 @@ public sealed class LLMChatPlugin : MainPlugin
         {
             Debug.WriteLine($"LLM action '{action.Name}' failed: {ex}");
         }
+    }
+
+    public string BuildModelStateSummary(Func<int, string> likabilityLabelSelector)
+    {
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+        {
+            return dispatcher.Invoke(() => BuildModelStateSummary(likabilityLabelSelector));
+        }
+
+        var save = MW.Core.Save;
+        var likability = (int)save.Likability;
+        var controller = MW.Core.Controller;
+        var builder = new StringBuilder();
+        builder.Append("[当前状态]\n");
+        builder.Append(CultureInfo.InvariantCulture,
+            $"宠物: {save.Name}, 主人: {save.HostName}, 模式: {save.Mode}, 好感度: {likabilityLabelSelector(likability)}({likability})\n");
+        builder.Append(CultureInfo.InvariantCulture,
+            $"等级: {save.Level}, 金钱: {save.Money:0.##}, 经验: {save.Exp:0.##}/{save.LevelUpNeed():0.##}\n");
+        builder.Append(CultureInfo.InvariantCulture,
+            $"体力: {save.Strength:0.##}/{save.StrengthMax:0.##}, 饱腹: {save.StrengthFood:0.##}, 口渴: {save.StrengthDrink:0.##}, 心情: {save.Feeling:0.##}/{save.FeelingMax:0.##}, 健康: {save.Health:0.##}\n");
+        builder.Append(CultureInfo.InvariantCulture,
+            $"位置距离: 左 {controller.GetWindowsDistanceLeft():0}, 右 {controller.GetWindowsDistanceRight():0}, 上 {controller.GetWindowsDistanceUp():0}, 下 {controller.GetWindowsDistanceDown():0}, 缩放: {controller.ZoomRatio:0.##}\n");
+        builder.Append("可喂食名称: ");
+        builder.Append(GetFoodNameListForPrompt(12));
+        return builder.ToString();
+    }
+
+    private string BuildBriefStatusSummary()
+    {
+        var save = MW.Core.Save;
+        return string.Create(CultureInfo.InvariantCulture,
+            $"当前状态：{save.Mode}\n体力 {save.Strength:0.##}/{save.StrengthMax:0.##}，饱腹 {save.StrengthFood:0.##}，口渴 {save.StrengthDrink:0.##}，心情 {save.Feeling:0.##}/{save.FeelingMax:0.##}，健康 {save.Health:0.##}，好感度 {save.Likability:0.##}。");
+    }
+
+    private string GetFoodNameListForPrompt(int maxCount)
+    {
+        var names = MW.Foods
+            .Where(IsSafeFoodForModel)
+            .Select(GetFoodDisplayName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(maxCount);
+        return string.Join("、", names);
+    }
+
+    private void ExecuteMovePetAction(IReadOnlyDictionary<string, string> args)
+    {
+        var distance = 120.0;
+        if (TryReadDouble(args, "distance", out var requestedDistance))
+        {
+            distance = Math.Clamp(Math.Abs(requestedDistance), 20.0, 300.0);
+        }
+
+        var x = 0.0;
+        var y = 0.0;
+        if (TryReadDouble(args, "x", out var requestedX))
+        {
+            x = Math.Clamp(requestedX, -300.0, 300.0);
+        }
+
+        if (TryReadDouble(args, "y", out var requestedY))
+        {
+            y = Math.Clamp(requestedY, -300.0, 300.0);
+        }
+
+        if (TryReadString(args, "direction", out var direction))
+        {
+            switch (NormalizeActionName(direction))
+            {
+                case "left":
+                case "左":
+                    x = -distance;
+                    y = 0;
+                    break;
+                case "right":
+                case "右":
+                    x = distance;
+                    y = 0;
+                    break;
+                case "up":
+                case "上":
+                    x = 0;
+                    y = -distance;
+                    break;
+                case "down":
+                case "下":
+                    x = 0;
+                    y = distance;
+                    break;
+            }
+        }
+
+        if (Math.Abs(x) < 0.1 && Math.Abs(y) < 0.1)
+        {
+            return;
+        }
+
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            MW.Core.Controller.MoveWindows(x, y);
+            MW.Core.Controller.CheckPosition();
+        });
+    }
+
+    private void FeedByName(string foodName)
+    {
+        var normalizedName = NormalizeText(foodName);
+        if (string.IsNullOrWhiteSpace(normalizedName))
+        {
+            return;
+        }
+
+        var food = MW.Foods
+            .Where(IsSafeFoodForModel)
+            .FirstOrDefault(item => FoodMatches(item, normalizedName));
+        if (food == null)
+        {
+            MW.Main.SayRnd($"没有找到可以喂的「{LimitLength(foodName, 24)}」。", true, "LLM Chat");
+            return;
+        }
+
+        MW.TakeItem(food.Clone());
+    }
+
+    private void ExecuteOpenBetterBuyAction(IReadOnlyDictionary<string, string> args)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            if (TryReadBetterBuyType(args, out var type))
+            {
+                MW.ShowBetterBuy(type);
+                return;
+            }
+
+            if (TryReadString(args, "name", out var foodName)
+                || TryReadString(args, "item", out foodName)
+                || TryReadString(args, "food", out foodName))
+            {
+                var food = FindFoodByName(foodName, allowAllBetterBuyTypes: true);
+                if (food != null)
+                {
+                    MW.ShowBetterBuy(food.Type);
+                    return;
+                }
+
+                MW.Main.SayRnd($"没有找到「{LimitLength(foodName, 24)}」所属的更好买分类。", true, "LLM Chat");
+                return;
+            }
+
+            MW.ShowBetterBuy(Food.FoodType.Food);
+        });
+    }
+
+    private void ExecuteBuyAndUseAction(IReadOnlyDictionary<string, string> args)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            if (!TryReadString(args, "name", out var foodName)
+                && !TryReadString(args, "item", out foodName)
+                && !TryReadString(args, "food", out foodName))
+            {
+                MW.ShowBetterBuy(Food.FoodType.Food);
+                MW.Main.SayRnd("要买什么呀？我先打开更好买给你看看。", true, "LLM Chat");
+                return;
+            }
+
+            var food = FindFoodByName(foodName, allowAllBetterBuyTypes: true);
+            if (food == null)
+            {
+                MW.Main.SayRnd($"没有在更好买里找到「{LimitLength(foodName, 24)}」。", true, "LLM Chat");
+                return;
+            }
+
+            MW.ShowBetterBuy(food.Type);
+
+            if (!MW.Set.EnableFunction)
+            {
+                MW.Main.SayRnd("当前没有启用数据功能，我先打开更好买，购买需要你手动确认。", true, "LLM Chat");
+                return;
+            }
+
+            if (MW.HashCheck && food.IsOverLoad())
+            {
+                MW.Main.SayRnd($"「{GetFoodDisplayName(food)}」属性超模，需要主人在更好买里手动确认后再使用。", true, "LLM Chat");
+                return;
+            }
+
+            var price = Math.Max(0, food.Price);
+            var save = MW.Core.Save;
+            if ((food.Price >= 1000 || food.Exp >= 1000) && food.Price >= save.Money)
+            {
+                MW.Main.SayRnd(
+                    $"钱不够买「{GetFoodDisplayName(food)}」啦，需要 {food.Price:0.##}，现在只有 {save.Money:0.##}。",
+                    true,
+                    "LLM Chat");
+                return;
+            }
+
+            save.Money -= price;
+            MW.TakeItem(food);
+            MW.TakeItemHandle(food, 1, "betterbuy");
+            MW.DisplayFoodAnimation(food.GetGraph(), food.ImageSource);
+            MW.Main.SayRnd($"已在更好买购买并使用「{GetFoodDisplayName(food)}」，花费 {price:0.##}。", true, "LLM Chat");
+        });
+    }
+
+    private bool TryReadBetterBuyType(IReadOnlyDictionary<string, string> args, out Food.FoodType type)
+    {
+        type = Food.FoodType.Food;
+        return TryReadString(args, "type", out var raw)
+            && TryParseFoodType(raw, out type);
+    }
+
+    private static bool TryParseFoodType(string raw, out Food.FoodType type)
+    {
+        switch (NormalizeActionName(raw))
+        {
+            case "food":
+            case "食物":
+                type = Food.FoodType.Food;
+                return true;
+            case "meal":
+            case "正餐":
+                type = Food.FoodType.Meal;
+                return true;
+            case "snack":
+            case "零食":
+                type = Food.FoodType.Snack;
+                return true;
+            case "drink":
+            case "drinks":
+            case "饮料":
+            case "喝的":
+                type = Food.FoodType.Drink;
+                return true;
+            case "functional":
+            case "function":
+            case "功能":
+            case "功能性":
+                type = Food.FoodType.Functional;
+                return true;
+            case "drug":
+            case "medicine":
+            case "药":
+            case "药品":
+                type = Food.FoodType.Drug;
+                return true;
+            case "gift":
+            case "礼物":
+            case "礼品":
+                type = Food.FoodType.Gift;
+                return true;
+            case "star":
+            case "收藏":
+                type = Food.FoodType.Star;
+                return true;
+            default:
+                type = Food.FoodType.Food;
+                return false;
+        }
+    }
+
+    private Food? FindFoodByName(string foodName, bool allowAllBetterBuyTypes)
+    {
+        var normalizedName = NormalizeText(foodName);
+        if (string.IsNullOrWhiteSpace(normalizedName))
+        {
+            return null;
+        }
+
+        var foods = allowAllBetterBuyTypes ? MW.Foods : MW.Foods.Where(IsSafeFoodForModel);
+        return foods.FirstOrDefault(item => FoodMatches(item, normalizedName));
+    }
+
+    private static bool FoodMatches(Food food, string normalizedName)
+    {
+        return FoodNameMatches(food.Name, normalizedName)
+            || FoodNameMatches(food.TranslateName, normalizedName)
+            || FoodNameMatches(food.Description, normalizedName);
+    }
+
+    private static bool FoodNameMatches(string? candidate, string normalizedName)
+    {
+        var normalizedCandidate = NormalizeText(candidate);
+        if (string.IsNullOrEmpty(normalizedCandidate))
+        {
+            return false;
+        }
+
+        return normalizedCandidate == normalizedName
+            || normalizedCandidate.Contains(normalizedName, StringComparison.Ordinal)
+            || normalizedName.Contains(normalizedCandidate, StringComparison.Ordinal);
+    }
+
+    private static bool IsSafeFoodForModel(Food food)
+    {
+        return food.Type is Food.FoodType.Food
+            or Food.FoodType.Meal
+            or Food.FoodType.Snack
+            or Food.FoodType.Drink
+            or Food.FoodType.Functional;
+    }
+
+    private static string GetFoodDisplayName(Food food)
+    {
+        return string.IsNullOrWhiteSpace(food.TranslateName) ? food.Name : food.TranslateName;
     }
 
     private static string NormalizeActionName(string name)
@@ -255,6 +595,13 @@ public sealed class LLMChatPlugin : MainPlugin
     {
         var trimmed = text.Trim();
         return trimmed.Length <= maxLength ? trimmed : trimmed[..maxLength];
+    }
+
+    private static string NormalizeText(string? text)
+    {
+        return string.IsNullOrWhiteSpace(text)
+            ? string.Empty
+            : new string(text.Where(c => !char.IsWhiteSpace(c)).ToArray()).ToLowerInvariant();
     }
 
     public Task SpeakPreviewAsync(string text)

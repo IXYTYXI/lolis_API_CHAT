@@ -6,7 +6,7 @@ public sealed class LLMChatTalkAPI : TalkBox
 {
     private static readonly string[] LikabilityLabels = { "陌生", "普通", "喜欢", "爱" };
     private const string ActionPrompt = """
-你可以选择让游戏执行一个安全动作。普通聊天不需要动作时，直接自然回复。
+你可以选择让游戏执行最多 3 个安全动作。普通聊天不需要动作时，直接自然回复。
 如果需要动作，请只返回一个 JSON 对象，不要使用 Markdown：
 {
   "reply": "给用户看的自然回复",
@@ -15,11 +15,18 @@ public sealed class LLMChatTalkAPI : TalkBox
     { "name": "open_llm_settings" },
     { "name": "open_game_settings" },
     { "name": "open_gallery" },
+    { "name": "show_panel" },
+    { "name": "reset_position" },
+    { "name": "move_pet", "args": { "direction": "left", "distance": "120" } },
+    { "name": "open_better_buy", "args": { "name": "要购买的物品名称" } },
+    { "name": "buy_and_use", "args": { "name": "要购买并使用的物品名称" } },
+    { "name": "feed_by_name", "args": { "name": "食物或饮料名称" } },
+    { "name": "read_status" },
     { "name": "set_zoom", "args": { "level": "1.0" } },
     { "name": "play_tts", "args": { "text": "额外播放的短语音" } }
   ]
 }
-只允许使用上面列出的动作；不需要动作时不要输出 JSON。
+只允许使用上面列出的动作；用户说“买/购买/买来喝/买来吃”时优先使用 buy_and_use，不要用 feed_by_name；只想浏览商店时才用 open_better_buy；不要猜不存在的食物名称；需要动作时，回复正文必须写在 reply 里，不要在 JSON 前后输出任何字符；不需要动作时不要输出 JSON。
 """;
 
     private readonly LLMChatPlugin _plugin;
@@ -74,14 +81,16 @@ public sealed class LLMChatTalkAPI : TalkBox
 
     private string BuildPrompt(string userText)
     {
-        var save = _plugin.MW.Core.Save;
-        var likability = (int)save.Likability;
-        var likeText = LikabilityLabels[GetLikabilityLevel(likability)];
-        var state = $"[当前状态: {save.Mode}, 好感度: {likeText}({likability})]";
+        var state = _plugin.BuildModelStateSummary(GetLikabilityLabel);
 
         return _plugin.Settings.EnableModelActions
             ? $"{state}\n{ActionPrompt}\n用户输入：{userText}"
             : $"{state}\n{userText}";
+    }
+
+    private static string GetLikabilityLabel(int likability)
+    {
+        return LikabilityLabels[GetLikabilityLevel(likability)];
     }
 
     private static int GetLikabilityLevel(int likability)

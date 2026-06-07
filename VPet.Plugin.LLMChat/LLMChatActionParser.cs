@@ -28,7 +28,69 @@ public static class LLMChatActionParser
             }
         }
 
+        foreach (var candidate in EnumerateJsonObjects(content))
+        {
+            if (TryParseJson(candidate, out plan))
+            {
+                return plan;
+            }
+        }
+
         return new LLMChatActionPlan(content.Trim(), Array.Empty<LLMChatAction>());
+    }
+
+    private static IEnumerable<string> EnumerateJsonObjects(string content)
+    {
+        for (var start = content.IndexOf('{'); start >= 0; start = content.IndexOf('{', start + 1))
+        {
+            var depth = 0;
+            var inString = false;
+            var escaped = false;
+
+            for (var index = start; index < content.Length; index++)
+            {
+                var current = content[index];
+                if (inString)
+                {
+                    if (escaped)
+                    {
+                        escaped = false;
+                    }
+                    else if (current == '\\')
+                    {
+                        escaped = true;
+                    }
+                    else if (current == '"')
+                    {
+                        inString = false;
+                    }
+
+                    continue;
+                }
+
+                if (current == '"')
+                {
+                    inString = true;
+                    continue;
+                }
+
+                if (current == '{')
+                {
+                    depth++;
+                    continue;
+                }
+
+                if (current == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        yield return content[start..(index + 1)];
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     private static bool TryParseJson(string json, out LLMChatActionPlan plan)
