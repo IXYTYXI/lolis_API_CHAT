@@ -1,0 +1,13 @@
+.appdata/
+.dotnet/
+.dotnet-home/
+.localappdata/
+.nuget-packages/
+.vscode/settings.json
+dotnet-install.ps1
+bin/
+obj/
+VPet.Plugin.LLMChat/bin/
+VPet.Plugin.LLMChat/obj/
+VPet.Plugin.LLMChat/voice-cache/
+dist/LLMChat/
