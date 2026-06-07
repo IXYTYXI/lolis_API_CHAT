@@ -31,6 +31,9 @@ public sealed class LLMChatPlugin : MainPlugin
     private bool _toolbarButtonsRegistered;
     private bool _modConfigMenuRegistered;
     private LLMChatInputWindow? _chatInputWindow;
+    private string? _lastShoppingItemName;
+    private Food.FoodType? _lastShoppingType;
+    private int _lastShoppingCount;
 
     public override string PluginName => "LLM Chat";
 
@@ -177,7 +180,7 @@ public sealed class LLMChatPlugin : MainPlugin
             return;
         }
 
-        foreach (var action in actions.Take(3))
+        foreach (var action in actions.Take(5))
         {
             ExecuteModelAction(action);
         }
@@ -283,6 +286,14 @@ public sealed class LLMChatPlugin : MainPlugin
             $"位置距离: 左 {controller.GetWindowsDistanceLeft():0}, 右 {controller.GetWindowsDistanceRight():0}, 上 {controller.GetWindowsDistanceUp():0}, 下 {controller.GetWindowsDistanceDown():0}, 缩放: {controller.ZoomRatio:0.##}\n");
         builder.Append("可喂食名称: ");
         builder.Append(GetFoodNameListForPrompt(12));
+        if (!string.IsNullOrWhiteSpace(_lastShoppingItemName))
+        {
+            builder.AppendLine();
+            builder.Append(CultureInfo.InvariantCulture,
+                $"[购物上下文]\n最近更好买商品: {_lastShoppingItemName}, 分类: {_lastShoppingType}, 上次数量: {_lastShoppingCount}. ");
+            builder.Append("如果用户说“再买/继续买/还有”并给出新商品名，继续用 buy_and_use 购买新商品；如果用户只说“再来一个/再来一瓶/再买一个”但没有新商品名，默认复购最近商品。");
+        }
+
         return builder.ToString();
     }
 
@@ -400,6 +411,7 @@ public sealed class LLMChatPlugin : MainPlugin
                 var food = FindFoodByName(foodName, allowAllBetterBuyTypes: true);
                 if (food != null)
                 {
+                    RememberShoppingItem(food, 0);
                     MW.ShowBetterBuy(food.Type);
                     return;
                 }
@@ -420,16 +432,30 @@ public sealed class LLMChatPlugin : MainPlugin
                 && !TryReadString(args, "item", out foodName)
                 && !TryReadString(args, "food", out foodName))
             {
+                if (!string.IsNullOrWhiteSpace(_lastShoppingItemName))
+                {
+                    foodName = _lastShoppingItemName;
+                }
+                else
+                {
                 MW.ShowBetterBuy(Food.FoodType.Food);
                 MW.Main.SayRnd("要买什么呀？我先打开更好买给你看看。", true, "LLM Chat");
                 return;
+                }
             }
 
             var food = FindFoodByName(foodName, allowAllBetterBuyTypes: true);
             if (food == null)
             {
-                MW.Main.SayRnd($"没有在更好买里找到「{LimitLength(foodName, 24)}」。", true, "LLM Chat");
-                return;
+                if (TryUseLastShoppingItem(foodName, out food))
+                {
+                    foodName = GetFoodDisplayName(food);
+                }
+                else
+                {
+                    MW.Main.SayRnd($"没有在更好买里找到「{LimitLength(foodName, 24)}」。", true, "LLM Chat");
+                    return;
+                }
             }
 
             MW.ShowBetterBuy(food.Type);
@@ -448,21 +474,74 @@ public sealed class LLMChatPlugin : MainPlugin
 
             var price = Math.Max(0, food.Price);
             var save = MW.Core.Save;
-            if ((food.Price >= 1000 || food.Exp >= 1000) && food.Price >= save.Money)
+            var count = ReadPurchaseCount(args);
+            if ((food.Price >= 1000 || food.Exp >= 1000) && food.Price * count >= save.Money)
             {
                 MW.Main.SayRnd(
-                    $"钱不够买「{GetFoodDisplayName(food)}」啦，需要 {food.Price:0.##}，现在只有 {save.Money:0.##}。",
+                    $"钱不够买 {count} 个「{GetFoodDisplayName(food)}」啦，需要 {food.Price * count:0.##}，现在只有 {save.Money:0.##}。",
                     true,
                     "LLM Chat");
                 return;
             }
 
-            save.Money -= price;
-            MW.TakeItem(food);
-            MW.TakeItemHandle(food, 1, "betterbuy");
+            for (var index = 0; index < count; index++)
+            {
+                save.Money -= price;
+                MW.TakeItem(food);
+            }
+
+            MW.TakeItemHandle(food, count, "betterbuy");
             MW.DisplayFoodAnimation(food.GetGraph(), food.ImageSource);
-            MW.Main.SayRnd($"已在更好买购买并使用「{GetFoodDisplayName(food)}」，花费 {price:0.##}。", true, "LLM Chat");
+            RememberShoppingItem(food, count);
+            MW.Main.SayRnd($"已在更好买购买并使用 {count} 个「{GetFoodDisplayName(food)}」，花费 {price * count:0.##}。", true, "LLM Chat");
         });
+    }
+
+    private void RememberShoppingItem(Food food, int count)
+    {
+        _lastShoppingItemName = GetFoodDisplayName(food);
+        _lastShoppingType = food.Type;
+        _lastShoppingCount = Math.Max(1, count);
+    }
+
+    private bool TryUseLastShoppingItem(string requestedName, out Food food)
+    {
+        food = null!;
+        if (string.IsNullOrWhiteSpace(_lastShoppingItemName)
+            || !IsRepeatShoppingRequest(requestedName))
+        {
+            return false;
+        }
+
+        var lastFood = FindFoodByName(_lastShoppingItemName, allowAllBetterBuyTypes: true);
+        if (lastFood == null)
+        {
+            return false;
+        }
+
+        food = lastFood;
+        return true;
+    }
+
+    private static bool IsRepeatShoppingRequest(string text)
+    {
+        var normalized = NormalizeText(text);
+        return normalized is "再来一个" or "再来一瓶" or "再买一个" or "再买一瓶" or "继续" or "继续买" or "再来"
+            || normalized.Contains("同样", StringComparison.Ordinal)
+            || normalized.Contains("一样", StringComparison.Ordinal);
+    }
+
+    private static int ReadPurchaseCount(IReadOnlyDictionary<string, string> args)
+    {
+        var count = 1;
+        if (TryReadInt(args, "count", out var countArg)
+            || TryReadInt(args, "quantity", out countArg)
+            || TryReadInt(args, "times", out countArg))
+        {
+            count = countArg;
+        }
+
+        return Math.Clamp(count, 1, 10);
     }
 
     private bool TryReadBetterBuyType(IReadOnlyDictionary<string, string> args, out Food.FoodType type)
@@ -589,6 +668,13 @@ public sealed class LLMChatPlugin : MainPlugin
         value = 0;
         return args.TryGetValue(key, out var raw)
             && double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+    }
+
+    private static bool TryReadInt(IReadOnlyDictionary<string, string> args, string key, out int value)
+    {
+        value = 0;
+        return args.TryGetValue(key, out var raw)
+            && int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
     }
 
     private static string LimitLength(string text, int maxLength)

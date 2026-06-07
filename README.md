@@ -91,11 +91,15 @@ When model actions are enabled, the model may return a JSON object with a
 - `reset_position`
 - `move_pet` with `args.direction` (`left`, `right`, `up`, `down`) and optional `args.distance`, clamped to safe movement.
 - `open_better_buy` with `args.name` or `args.type`, opening VPet's Better Buy page for the matching item category.
-- `buy_and_use` with `args.name`, opening Better Buy, finding the matching item, checking money, charging `Price`, triggering Better Buy's take-item event, and using the item.
+- `buy_and_use` with `args.name` and optional `args.count`, opening Better Buy, finding the matching item, checking money, charging `Price`, triggering Better Buy's take-item event, and using the item. `count` is clamped to `1` through `10`.
 - `feed_by_name` with `args.name`, limited to known food, meal, snack, drink, or functional item names in the current VPet food list.
 - `read_status`
 - `set_zoom` with `args.level` clamped to `0.5` through `2.0`
 - `play_tts` with short `args.text`
+
+Shopping context is kept in memory. After buying one item, follow-up messages like
+`再买咖啡`, `还有蛋糕`, or `再来一瓶` continue the Better Buy flow; repeated
+items reuse the last bought item when the user does not name a new one.
 
 TTS settings:
 
