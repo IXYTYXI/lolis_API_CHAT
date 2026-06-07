@@ -34,6 +34,8 @@ public sealed class LLMChatPlugin : MainPlugin
     private string? _lastShoppingItemName;
     private Food.FoodType? _lastShoppingType;
     private int _lastShoppingCount;
+    private string? _pendingWantedItemName;
+    private Food.FoodType? _pendingWantedItemType;
 
     public override string PluginName => "LLM Chat";
 
@@ -221,8 +223,36 @@ public sealed class LLMChatPlugin : MainPlugin
                     ExecuteMovePetAction(action.Args);
                     break;
 
+                case "start_work":
+                    ExecuteStartWorkAction(action.Args, GraphHelper.Work.WorkType.Work);
+                    break;
+
+                case "start_study":
+                    ExecuteStartWorkAction(action.Args, GraphHelper.Work.WorkType.Study);
+                    break;
+
+                case "start_play":
+                    ExecuteStartWorkAction(action.Args, GraphHelper.Work.WorkType.Play);
+                    break;
+
+                case "stop_work":
+                case "stop_current_work":
+                    ExecuteStopWorkAction();
+                    break;
+
                 case "open_better_buy":
                     ExecuteOpenBetterBuyAction(action.Args);
+                    break;
+
+                case "pick_wanted_item":
+                case "choose_wanted_item":
+                case "random_wanted_item":
+                    ExecutePickWantedItemAction();
+                    break;
+
+                case "clear_wanted_item":
+                case "decline_wanted_item":
+                    ClearWantedItem();
                     break;
 
                 case "buy_and_use":
@@ -284,8 +314,27 @@ public sealed class LLMChatPlugin : MainPlugin
             $"体力: {save.Strength:0.##}/{save.StrengthMax:0.##}, 饱腹: {save.StrengthFood:0.##}, 口渴: {save.StrengthDrink:0.##}, 心情: {save.Feeling:0.##}/{save.FeelingMax:0.##}, 健康: {save.Health:0.##}\n");
         builder.Append(CultureInfo.InvariantCulture,
             $"位置距离: 左 {controller.GetWindowsDistanceLeft():0}, 右 {controller.GetWindowsDistanceRight():0}, 上 {controller.GetWindowsDistanceUp():0}, 下 {controller.GetWindowsDistanceDown():0}, 缩放: {controller.ZoomRatio:0.##}\n");
-        builder.Append("可喂食名称: ");
-        builder.Append(GetFoodNameListForPrompt(12));
+        builder.AppendLine("更好买商品名称（全量，按分类）：");
+        builder.Append(GetBetterBuyItemListForPrompt());
+        builder.AppendLine();
+        builder.AppendLine("可执行工作/学习/娱乐（按分类）：");
+        builder.Append(GetWorkListForPrompt());
+        if (MW.Main.State == VPet_Simulator.Core.Main.WorkingState.Work && MW.Main.NowWork != null)
+        {
+            builder.AppendLine();
+            builder.Append(CultureInfo.InvariantCulture,
+                $"[当前工作上下文]\n正在进行: {GetWorkDisplayName(MW.Main.NowWork)}, 类型: {TranslateWorkType(MW.Main.NowWork.Type)}, 剩余约 {GetRemainingWorkMinutes(MW.Main.NowWork):0.#} 分钟. ");
+            builder.Append("如果用户要求停止当前工作/学习/娱乐，用 stop_work；如果用户要求换到新项目，直接用 start_work/start_study/start_play，插件会先停止当前项再切换。");
+        }
+
+        if (!string.IsNullOrWhiteSpace(_pendingWantedItemName))
+        {
+            builder.AppendLine();
+            builder.Append(CultureInfo.InvariantCulture,
+                $"[想要商品上下文]\n桌宠刚随机想要: {_pendingWantedItemName}, 分类: {FormatFoodType(_pendingWantedItemType)}. ");
+            builder.Append("如果用户同意购买、说“买/可以/好/给你买/就这个”，用 buy_and_use 购买这个商品；如果用户拒绝、说“不买/算了/不要”，用 clear_wanted_item；如果用户说“换一个/重新选/再想一个”，用 pick_wanted_item。");
+        }
+
         if (!string.IsNullOrWhiteSpace(_lastShoppingItemName))
         {
             builder.AppendLine();
@@ -304,15 +353,61 @@ public sealed class LLMChatPlugin : MainPlugin
             $"当前状态：{save.Mode}\n体力 {save.Strength:0.##}/{save.StrengthMax:0.##}，饱腹 {save.StrengthFood:0.##}，口渴 {save.StrengthDrink:0.##}，心情 {save.Feeling:0.##}/{save.FeelingMax:0.##}，健康 {save.Health:0.##}，好感度 {save.Likability:0.##}。");
     }
 
-    private string GetFoodNameListForPrompt(int maxCount)
+    private string GetBetterBuyItemListForPrompt()
     {
-        var names = MW.Foods
-            .Where(IsSafeFoodForModel)
-            .Select(GetFoodDisplayName)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(maxCount);
-        return string.Join("、", names);
+        var groups = MW.Foods
+            .Select(food => new { food.Type, Name = GetFoodDisplayName(food) })
+            .Where(item => !string.IsNullOrWhiteSpace(item.Name))
+            .GroupBy(item => item.Type)
+            .OrderBy(group => GetFoodTypeSortOrder(group.Key));
+
+        var builder = new StringBuilder();
+        foreach (var group in groups)
+        {
+            if (builder.Length > 0)
+            {
+                builder.AppendLine();
+            }
+
+            var names = group
+                .Select(item => item.Name.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+            builder.Append(TranslateFoodType(group.Key));
+            builder.Append(": ");
+            builder.Append(string.Join("、", names));
+        }
+
+        return builder.ToString();
+    }
+
+    private string GetWorkListForPrompt()
+    {
+        MW.Main.WorkList(out var works, out var studies, out var plays);
+        var builder = new StringBuilder();
+        AppendWorkGroup(builder, "工作", works);
+        AppendWorkGroup(builder, "学习", studies);
+        AppendWorkGroup(builder, "娱乐", plays);
+        return builder.ToString();
+    }
+
+    private static void AppendWorkGroup(StringBuilder builder, string label, IEnumerable<GraphHelper.Work> works)
+    {
+        if (builder.Length > 0)
+        {
+            builder.AppendLine();
+        }
+
+        builder.Append(label);
+        builder.Append(": ");
+        var names = works.Select(work => string.Create(CultureInfo.InvariantCulture,
+            $"{GetWorkDisplayName(work)}(Lv {work.LevelLimit}, {work.Time}分钟)"));
+        builder.Append(string.Join("、", names));
+    }
+
+    private double GetRemainingWorkMinutes(GraphHelper.Work work)
+    {
+        var elapsed = (DateTime.Now - MW.Main.WorkTimer.StartTime).TotalMinutes;
+        return Math.Max(0, work.Time - elapsed);
     }
 
     private void ExecuteMovePetAction(IReadOnlyDictionary<string, string> args)
@@ -394,6 +489,106 @@ public sealed class LLMChatPlugin : MainPlugin
         MW.TakeItem(food.Clone());
     }
 
+    private void ExecuteStartWorkAction(
+        IReadOnlyDictionary<string, string> args,
+        GraphHelper.Work.WorkType preferredType)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            if (!TryReadString(args, "name", out var workName)
+                && !TryReadString(args, "work", out workName)
+                && !TryReadString(args, "activity", out workName))
+            {
+                MW.Main.SayRnd($"想开始哪个{TranslateWorkType(preferredType)}？", true, "LLM Chat");
+                return;
+            }
+
+            var work = FindWorkByName(workName, preferredType);
+            if (work == null)
+            {
+                MW.Main.SayRnd($"没有找到名为「{LimitLength(workName, 24)}」的{TranslateWorkType(preferredType)}。", true, "LLM Chat");
+                return;
+            }
+
+            if (!CanStartWork(work))
+            {
+                return;
+            }
+
+            if (MW.Main.State == VPet_Simulator.Core.Main.WorkingState.Work && MW.Main.NowWork != null)
+            {
+                if (WorkMatches(MW.Main.NowWork, NormalizeText(GetWorkDisplayName(work))))
+                {
+                    MW.Main.SayRnd($"现在已经在进行「{GetWorkDisplayName(work)}」啦。", true, "LLM Chat");
+                    return;
+                }
+
+                var previous = GetWorkDisplayName(MW.Main.NowWork);
+                MW.Main.WorkTimer.Stop(
+                    () => StartWorkAndReport(work, $"已停止「{previous}」，开始{TranslateWorkType(work.Type)}「{GetWorkDisplayName(work)}」。"),
+                    VPet_Simulator.Core.WorkTimer.FinishWorkInfo.StopReason.MenualStop);
+                return;
+            }
+
+            StartWorkAndReport(work, $"开始{TranslateWorkType(work.Type)}「{GetWorkDisplayName(work)}」。");
+        });
+    }
+
+    private void ExecuteStopWorkAction()
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            if (MW.Main.State != VPet_Simulator.Core.Main.WorkingState.Work || MW.Main.NowWork == null)
+            {
+                MW.Main.SayRnd("现在没有正在进行的工作、学习或娱乐。", true, "LLM Chat");
+                return;
+            }
+
+            var workName = GetWorkDisplayName(MW.Main.NowWork);
+            MW.Main.WorkTimer.Stop(
+                () => MW.Main.SayRnd($"已停止「{workName}」。", true, "LLM Chat"),
+                VPet_Simulator.Core.WorkTimer.FinishWorkInfo.StopReason.MenualStop);
+        });
+    }
+
+    private void StartWorkAndReport(GraphHelper.Work work, string successMessage)
+    {
+        if (MW.Main.StartWork(work))
+        {
+            MW.Main.SayRnd(successMessage, true, "LLM Chat");
+        }
+        else
+        {
+            MW.Main.SayRnd($"没能开始「{GetWorkDisplayName(work)}」。", true, "LLM Chat");
+        }
+    }
+
+    private bool CanStartWork(GraphHelper.Work work)
+    {
+        if (!MW.Core.Controller.EnableFunction)
+        {
+            MW.Main.SayRnd("当前没有启用数据功能，不能开始工作、学习或娱乐。", true, "LLM Chat");
+            return false;
+        }
+
+        if (MW.Core.Save.Mode == IGameSave.ModeType.Ill)
+        {
+            MW.Main.SayRnd($"现在生病了，没法进行「{GetWorkDisplayName(work)}」。", true, "LLM Chat");
+            return false;
+        }
+
+        if (MW.Core.Save.Level < work.LevelLimit)
+        {
+            MW.Main.SayRnd(
+                $"等级不足，不能进行「{GetWorkDisplayName(work)}」：需要 Lv {work.LevelLimit}，当前 Lv {MW.Core.Save.Level}。",
+                true,
+                "LLM Chat");
+            return false;
+        }
+
+        return true;
+    }
+
     private void ExecuteOpenBetterBuyAction(IReadOnlyDictionary<string, string> args)
     {
         Application.Current.Dispatcher.Invoke(() =>
@@ -408,6 +603,18 @@ public sealed class LLMChatPlugin : MainPlugin
                 || TryReadString(args, "item", out foodName)
                 || TryReadString(args, "food", out foodName))
             {
+                if (IsBetterBuyRootRequest(foodName))
+                {
+                    MW.ShowBetterBuy(Food.FoodType.Food);
+                    return;
+                }
+
+                if (TryParseFoodType(foodName, out var namedType))
+                {
+                    MW.ShowBetterBuy(namedType);
+                    return;
+                }
+
                 var food = FindFoodByName(foodName, allowAllBetterBuyTypes: true);
                 if (food != null)
                 {
@@ -416,11 +623,32 @@ public sealed class LLMChatPlugin : MainPlugin
                     return;
                 }
 
-                MW.Main.SayRnd($"没有找到「{LimitLength(foodName, 24)}」所属的更好买分类。", true, "LLM Chat");
+                MW.ShowBetterBuy(Food.FoodType.Food);
+                MW.Main.SayRnd($"没有找到名为「{LimitLength(foodName, 24)}」的商品。我先打开更好买，想买什么再告诉我。", true, "LLM Chat");
                 return;
             }
 
             MW.ShowBetterBuy(Food.FoodType.Food);
+        });
+    }
+
+    private void ExecutePickWantedItemAction()
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            var food = PickRandomBetterBuyItem();
+            if (food == null)
+            {
+                MW.Main.SayRnd("更好买里暂时没有可以挑的商品。", true, "LLM Chat");
+                return;
+            }
+
+            _pendingWantedItemName = GetFoodDisplayName(food);
+            _pendingWantedItemType = food.Type;
+
+            var message = $"唔...我想要「{_pendingWantedItemName}」（{TranslateFoodType(food.Type)}，{food.Price:0.##} 金钱）！主人要给我买吗？";
+            MW.Main.SayRnd(message, true, "LLM Chat");
+            QueueSpeak(message);
         });
     }
 
@@ -432,16 +660,25 @@ public sealed class LLMChatPlugin : MainPlugin
                 && !TryReadString(args, "item", out foodName)
                 && !TryReadString(args, "food", out foodName))
             {
-                if (!string.IsNullOrWhiteSpace(_lastShoppingItemName))
+                if (!string.IsNullOrWhiteSpace(_pendingWantedItemName))
+                {
+                    foodName = _pendingWantedItemName;
+                }
+                else if (!string.IsNullOrWhiteSpace(_lastShoppingItemName))
                 {
                     foodName = _lastShoppingItemName;
                 }
                 else
                 {
-                MW.ShowBetterBuy(Food.FoodType.Food);
-                MW.Main.SayRnd("要买什么呀？我先打开更好买给你看看。", true, "LLM Chat");
-                return;
+                    MW.Main.SayRnd("要买什么呀？也可以问我想要什么，我来挑一个。", true, "LLM Chat");
+                    return;
                 }
+            }
+
+            if (IsBetterBuyRootRequest(foodName))
+            {
+                MW.Main.SayRnd("告诉我具体想买哪一个商品就行，或者问我想要什么。", true, "LLM Chat");
+                return;
             }
 
             var food = FindFoodByName(foodName, allowAllBetterBuyTypes: true);
@@ -458,11 +695,11 @@ public sealed class LLMChatPlugin : MainPlugin
                 }
             }
 
-            MW.ShowBetterBuy(food.Type);
+            var clearsPendingWantedItem = IsPendingWantedItem(food);
 
             if (!MW.Set.EnableFunction)
             {
-                MW.Main.SayRnd("当前没有启用数据功能，我先打开更好买，购买需要你手动确认。", true, "LLM Chat");
+                MW.Main.SayRnd("当前没有启用数据功能，购买需要主人手动确认。", true, "LLM Chat");
                 return;
             }
 
@@ -493,8 +730,21 @@ public sealed class LLMChatPlugin : MainPlugin
             MW.TakeItemHandle(food, count, "betterbuy");
             MW.DisplayFoodAnimation(food.GetGraph(), food.ImageSource);
             RememberShoppingItem(food, count);
+            if (clearsPendingWantedItem)
+            {
+                ClearWantedItem();
+            }
+
             MW.Main.SayRnd($"已在更好买购买并使用 {count} 个「{GetFoodDisplayName(food)}」，花费 {price * count:0.##}。", true, "LLM Chat");
         });
+    }
+
+    private Food? PickRandomBetterBuyItem()
+    {
+        var foods = MW.Foods
+            .Where(food => !string.IsNullOrWhiteSpace(GetFoodDisplayName(food)))
+            .ToArray();
+        return foods.Length == 0 ? null : foods[Random.Shared.Next(foods.Length)];
     }
 
     private void RememberShoppingItem(Food food, int count)
@@ -502,6 +752,18 @@ public sealed class LLMChatPlugin : MainPlugin
         _lastShoppingItemName = GetFoodDisplayName(food);
         _lastShoppingType = food.Type;
         _lastShoppingCount = Math.Max(1, count);
+    }
+
+    private void ClearWantedItem()
+    {
+        _pendingWantedItemName = null;
+        _pendingWantedItemType = null;
+    }
+
+    private bool IsPendingWantedItem(Food food)
+    {
+        return !string.IsNullOrWhiteSpace(_pendingWantedItemName)
+            && FoodMatches(food, NormalizeText(_pendingWantedItemName));
     }
 
     private bool TryUseLastShoppingItem(string requestedName, out Food food)
@@ -529,6 +791,12 @@ public sealed class LLMChatPlugin : MainPlugin
         return normalized is "再来一个" or "再来一瓶" or "再买一个" or "再买一瓶" or "继续" or "继续买" or "再来"
             || normalized.Contains("同样", StringComparison.Ordinal)
             || normalized.Contains("一样", StringComparison.Ordinal);
+    }
+
+    private static bool IsBetterBuyRootRequest(string text)
+    {
+        var normalized = NormalizeText(text);
+        return normalized is "商店" or "商城" or "购物" or "购物界面" or "购买" or "购买界面" or "买东西" or "更好买" or "betterbuy" or "shop" or "store";
     }
 
     private static int ReadPurchaseCount(IReadOnlyDictionary<string, string> args)
@@ -612,11 +880,45 @@ public sealed class LLMChatPlugin : MainPlugin
         return foods.FirstOrDefault(item => FoodMatches(item, normalizedName));
     }
 
+    private GraphHelper.Work? FindWorkByName(string workName, GraphHelper.Work.WorkType preferredType)
+    {
+        var normalizedName = NormalizeText(workName);
+        if (string.IsNullOrWhiteSpace(normalizedName))
+        {
+            return null;
+        }
+
+        MW.Main.WorkList(out var works, out var studies, out var plays);
+        var preferred = SelectWorksByType(preferredType, works, studies, plays);
+        return preferred.FirstOrDefault(work => WorkMatches(work, normalizedName))
+            ?? works.Concat(studies).Concat(plays).FirstOrDefault(work => WorkMatches(work, normalizedName));
+    }
+
+    private static IEnumerable<GraphHelper.Work> SelectWorksByType(
+        GraphHelper.Work.WorkType type,
+        IEnumerable<GraphHelper.Work> works,
+        IEnumerable<GraphHelper.Work> studies,
+        IEnumerable<GraphHelper.Work> plays)
+    {
+        return type switch
+        {
+            GraphHelper.Work.WorkType.Study => studies,
+            GraphHelper.Work.WorkType.Play => plays,
+            _ => works
+        };
+    }
+
     private static bool FoodMatches(Food food, string normalizedName)
     {
         return FoodNameMatches(food.Name, normalizedName)
             || FoodNameMatches(food.TranslateName, normalizedName)
             || FoodNameMatches(food.Description, normalizedName);
+    }
+
+    private static bool WorkMatches(GraphHelper.Work work, string normalizedName)
+    {
+        return FoodNameMatches(work.Name, normalizedName)
+            || FoodNameMatches(work.NameTrans, normalizedName);
     }
 
     private static bool FoodNameMatches(string? candidate, string normalizedName)
@@ -639,6 +941,58 @@ public sealed class LLMChatPlugin : MainPlugin
             or Food.FoodType.Snack
             or Food.FoodType.Drink
             or Food.FoodType.Functional;
+    }
+
+    private static int GetFoodTypeSortOrder(Food.FoodType type)
+    {
+        return type switch
+        {
+            Food.FoodType.Food => 0,
+            Food.FoodType.Meal => 1,
+            Food.FoodType.Snack => 2,
+            Food.FoodType.Drink => 3,
+            Food.FoodType.Functional => 4,
+            Food.FoodType.Drug => 5,
+            Food.FoodType.Gift => 6,
+            Food.FoodType.Star => 7,
+            _ => 99
+        };
+    }
+
+    private static string TranslateFoodType(Food.FoodType type)
+    {
+        return type switch
+        {
+            Food.FoodType.Food => "食物",
+            Food.FoodType.Meal => "正餐",
+            Food.FoodType.Snack => "零食",
+            Food.FoodType.Drink => "饮料",
+            Food.FoodType.Functional => "功能性",
+            Food.FoodType.Drug => "药品",
+            Food.FoodType.Gift => "礼品",
+            Food.FoodType.Star => "收藏",
+            _ => type.ToString()
+        };
+    }
+
+    private static string FormatFoodType(Food.FoodType? type)
+    {
+        return type.HasValue ? TranslateFoodType(type.Value) : "未知";
+    }
+
+    private static string TranslateWorkType(GraphHelper.Work.WorkType type)
+    {
+        return type switch
+        {
+            GraphHelper.Work.WorkType.Study => "学习",
+            GraphHelper.Work.WorkType.Play => "娱乐",
+            _ => "工作"
+        };
+    }
+
+    private static string GetWorkDisplayName(GraphHelper.Work work)
+    {
+        return string.IsNullOrWhiteSpace(work.NameTrans) ? work.Name : work.NameTrans;
     }
 
     private static string GetFoodDisplayName(Food food)

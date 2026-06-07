@@ -90,8 +90,12 @@ When model actions are enabled, the model may return a JSON object with a
 - `show_panel`
 - `reset_position`
 - `move_pet` with `args.direction` (`left`, `right`, `up`, `down`) and optional `args.distance`, clamped to safe movement.
+- `start_work`, `start_study`, and `start_play` with `args.name`, resolving the requested activity from VPet's current work/study/play lists and starting it after level, illness, and function-mode checks.
+- `stop_work`, stopping the current work/study/play item with VPet's manual-stop reason.
 - `open_better_buy` with `args.name` or `args.type`, opening VPet's Better Buy page for the matching item category.
-- `buy_and_use` with `args.name` and optional `args.count`, opening Better Buy, finding the matching item, checking money, charging `Price`, triggering Better Buy's take-item event, and using the item. `count` is clamped to `1` through `10`.
+- `pick_wanted_item`, randomly selecting one item from the full current VPet food/item list and asking the player whether to buy it.
+- `clear_wanted_item`, clearing the pending randomly selected item after the player refuses.
+- `buy_and_use` with `args.name` and optional `args.count`, finding the matching item in the full Better Buy item list, checking money, charging `Price`, triggering Better Buy's take-item event, and using the item without opening the Better Buy window. `count` is clamped to `1` through `10`.
 - `feed_by_name` with `args.name`, limited to known food, meal, snack, drink, or functional item names in the current VPet food list.
 - `read_status`
 - `set_zoom` with `args.level` clamped to `0.5` through `2.0`
@@ -100,6 +104,12 @@ When model actions are enabled, the model may return a JSON object with a
 Shopping context is kept in memory. After buying one item, follow-up messages like
 `再买咖啡`, `还有蛋糕`, or `再来一瓶` continue the Better Buy flow; repeated
 items reuse the last bought item when the user does not name a new one.
+Generic shop words such as `商店` or `更好买` open the Better Buy page instead of
+being treated as product names.
+Wanted-item context is also kept in memory. If the user asks the pet what it
+wants, the plugin randomly picks from the full item list and asks for player
+confirmation. Follow-up confirmation buys and uses that item directly; refusal
+clears the pending item; asking to switch picks a new random item.
 
 TTS settings:
 
