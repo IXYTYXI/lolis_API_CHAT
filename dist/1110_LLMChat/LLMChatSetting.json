@@ -10,6 +10,7 @@
   "timeoutSeconds": 60,
   "proxyUrl": "",
   "showTokenUsage": true,
+  "enableModelActions": true,
   "enableTextToSpeech": true,
   "ttsProvider": "MiniMax",
   "ttsBaseUrl": "https://api.minimax.io/v1",

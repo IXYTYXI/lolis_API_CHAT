@@ -10,7 +10,9 @@ public sealed class LLMChatInputWindow : Window
     private readonly TextBox _inputBox = new()
     {
         AcceptsReturn = true,
-        MinHeight = 120,
+        Height = 56,
+        MinHeight = 48,
+        MaxHeight = 56,
         TextWrapping = TextWrapping.Wrap,
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto
     };
@@ -19,23 +21,30 @@ public sealed class LLMChatInputWindow : Window
     {
         _plugin = plugin;
 
-        Title = "LLM聊天";
-        Width = 460;
-        Height = 260;
-        MinWidth = 360;
-        MinHeight = 220;
+        Title = "LLM 聊天";
+        Width = 360;
+        Height = 150;
+        MinWidth = 300;
+        MinHeight = 140;
         FontSize = 14;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        ResizeMode = ResizeMode.CanResizeWithGrip;
 
         Content = BuildContent();
-        Loaded += (_, _) => _inputBox.Focus();
+        Loaded += (_, _) => FocusInput();
+    }
+
+    public void FocusInput()
+    {
+        _inputBox.Focus();
+        _inputBox.CaretIndex = _inputBox.Text.Length;
     }
 
     private DockPanel BuildContent()
     {
         var root = new DockPanel
         {
-            Margin = new Thickness(14),
+            Margin = new Thickness(12),
             LastChildFill = true
         };
 
@@ -43,28 +52,28 @@ public sealed class LLMChatInputWindow : Window
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(0, 12, 0, 0)
+            Margin = new Thickness(0, 8, 0, 0)
         };
         DockPanel.SetDock(buttons, Dock.Bottom);
 
-        var cancelButton = new Button
+        var closeButton = new Button
         {
-            Content = "取消",
-            MinWidth = 88,
-            MinHeight = 32
+            Content = "关闭",
+            MinWidth = 72,
+            MinHeight = 30
         };
-        cancelButton.Click += (_, _) => Close();
+        closeButton.Click += (_, _) => Close();
 
         var sendButton = new Button
         {
             Content = "发送",
-            MinWidth = 88,
-            MinHeight = 32,
+            MinWidth = 72,
+            MinHeight = 30,
             Margin = new Thickness(8, 0, 0, 0)
         };
         sendButton.Click += (_, _) => Send();
 
-        buttons.Children.Add(cancelButton);
+        buttons.Children.Add(closeButton);
         buttons.Children.Add(sendButton);
         root.Children.Add(buttons);
 
@@ -86,11 +95,12 @@ public sealed class LLMChatInputWindow : Window
         var text = _inputBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(text))
         {
-            MessageBox.Show(this, "请输入聊天内容。", "LLM聊天", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(this, "请输入聊天内容。", "LLM 聊天", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
         _plugin.SubmitChat(text);
-        Close();
+        _inputBox.Clear();
+        FocusInput();
     }
 }

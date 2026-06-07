@@ -1,5 +1,6 @@
 using System.IO;
 using System.Diagnostics;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using VPet_Simulator.Core;
@@ -28,6 +29,7 @@ public sealed class LLMChatPlugin : MainPlugin
     private readonly SemaphoreSlim _speechLock = new(1, 1);
     private bool _toolbarButtonsRegistered;
     private bool _modConfigMenuRegistered;
+    private LLMChatInputWindow? _chatInputWindow;
 
     public override string PluginName => "LLM Chat";
 
@@ -133,13 +135,27 @@ public sealed class LLMChatPlugin : MainPlugin
 
     public void OpenChatWindow()
     {
+        if (_chatInputWindow != null)
+        {
+            if (_chatInputWindow.WindowState == WindowState.Minimized)
+            {
+                _chatInputWindow.WindowState = WindowState.Normal;
+            }
+
+            _chatInputWindow.Activate();
+            _chatInputWindow.FocusInput();
+            return;
+        }
+
         var window = new LLMChatInputWindow(this);
         if (Application.Current?.MainWindow != null)
         {
             window.Owner = Application.Current.MainWindow;
         }
 
-        window.ShowDialog();
+        window.Closed += (_, _) => _chatInputWindow = null;
+        _chatInputWindow = window;
+        window.Show();
     }
 
     public void SubmitChat(string text)
@@ -151,6 +167,94 @@ public sealed class LLMChatPlugin : MainPlugin
         }
 
         ChatTalkApi.Responded(text);
+    }
+
+    public void ExecuteModelActions(IReadOnlyList<LLMChatAction> actions)
+    {
+        if (!Settings.EnableModelActions || actions.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var action in actions.Take(3))
+        {
+            ExecuteModelAction(action);
+        }
+    }
+
+    private void ExecuteModelAction(LLMChatAction action)
+    {
+        var name = NormalizeActionName(action.Name);
+        try
+        {
+            switch (name)
+            {
+                case "open_chat":
+                    Application.Current.Dispatcher.Invoke(OpenChatWindow);
+                    break;
+
+                case "open_llm_settings":
+                    Application.Current.Dispatcher.Invoke(Setting);
+                    break;
+
+                case "open_game_settings":
+                    Application.Current.Dispatcher.Invoke(() => MW.ShowSetting(0));
+                    break;
+
+                case "open_gallery":
+                    Application.Current.Dispatcher.Invoke(MW.ShowGallery);
+                    break;
+
+                case "set_zoom":
+                    if (TryReadDouble(action.Args, "level", out var zoomLevel))
+                    {
+                        var safeZoomLevel = Math.Clamp(zoomLevel, 0.5, 2.0);
+                        Application.Current.Dispatcher.Invoke(() => MW.SetZoomLevel(safeZoomLevel));
+                    }
+                    break;
+
+                case "play_tts":
+                    if (TryReadString(action.Args, "text", out var speechText))
+                    {
+                        QueueSpeak(LimitLength(speechText, 120));
+                    }
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"LLM action '{action.Name}' failed: {ex}");
+        }
+    }
+
+    private static string NormalizeActionName(string name)
+    {
+        return name.Trim().Replace("-", "_").ToLowerInvariant();
+    }
+
+    private static bool TryReadString(IReadOnlyDictionary<string, string> args, string key, out string value)
+    {
+        value = string.Empty;
+        if (!args.TryGetValue(key, out var raw) || string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        value = raw.Trim();
+        return true;
+    }
+
+    private static bool TryReadDouble(IReadOnlyDictionary<string, string> args, string key, out double value)
+    {
+        value = 0;
+        return args.TryGetValue(key, out var raw)
+            && double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+    }
+
+    private static string LimitLength(string text, int maxLength)
+    {
+        var trimmed = text.Trim();
+        return trimmed.Length <= maxLength ? trimmed : trimmed[..maxLength];
     }
 
     public Task SpeakPreviewAsync(string text)

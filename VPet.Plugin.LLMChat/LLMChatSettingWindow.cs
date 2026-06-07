@@ -30,6 +30,7 @@ public sealed class LLMChatSettingWindow : Window
     private readonly TextBox _timeoutBox = CreateTextBox();
     private readonly TextBox _proxyUrlBox = CreateTextBox();
     private readonly CheckBox _showTokenUsageBox = new() { VerticalAlignment = VerticalAlignment.Center };
+    private readonly CheckBox _enableModelActionsBox = new() { VerticalAlignment = VerticalAlignment.Center };
     private readonly CheckBox _enableTtsBox = new() { VerticalAlignment = VerticalAlignment.Center };
     private readonly ComboBox _ttsProviderBox = new() { IsEditable = false, MinHeight = 30 };
     private readonly TextBox _ttsBaseUrlBox = CreateTextBox();
@@ -199,6 +200,7 @@ public sealed class LLMChatSettingWindow : Window
         AddRow(grid, row++, "超时秒数", _timeoutBox);
         AddRow(grid, row++, "代理 URL", _proxyUrlBox);
         AddRow(grid, row++, "Token 显示", _showTokenUsageBox);
+        AddRow(grid, row++, "模型动作", _enableModelActionsBox);
         AddSeparator(grid, row++);
         AddRow(grid, row++, "启用 TTS", _enableTtsBox);
         AddRow(grid, row++, "TTS Provider", _ttsProviderBox);
@@ -237,6 +239,7 @@ public sealed class LLMChatSettingWindow : Window
         _timeoutBox.Text = settings.TimeoutSeconds.ToString(CultureInfo.InvariantCulture);
         _proxyUrlBox.Text = settings.ProxyUrl;
         _showTokenUsageBox.IsChecked = settings.ShowTokenUsage;
+        _enableModelActionsBox.IsChecked = settings.EnableModelActions;
         _enableTtsBox.IsChecked = settings.EnableTextToSpeech;
         var provider = string.IsNullOrWhiteSpace(settings.TtsProvider)
             ? TextToSpeechClientFactory.OpenAICompatibleProvider
@@ -329,6 +332,7 @@ public sealed class LLMChatSettingWindow : Window
         }
 
         settings.ShowTokenUsage = _showTokenUsageBox.IsChecked == true;
+        settings.EnableModelActions = _enableModelActionsBox.IsChecked == true;
         settings.EnableTextToSpeech = _enableTtsBox.IsChecked == true;
         var selectedProvider = (_ttsProviderBox.SelectedItem as string) ?? _ttsProviderBox.Text;
         settings.TtsProvider = string.IsNullOrWhiteSpace(selectedProvider)

@@ -35,6 +35,8 @@ public sealed class LLMChatSettings
 
     public bool ShowTokenUsage { get; set; } = true;
 
+    public bool EnableModelActions { get; set; } = true;
+
     public bool EnableTextToSpeech { get; set; }
 
     public string TtsProvider { get; set; } = TextToSpeechClientFactory.OpenAICompatibleProvider;
@@ -86,6 +88,7 @@ public sealed class LLMChatSettings
         TimeoutSeconds = TimeoutSeconds,
         ProxyUrl = ProxyUrl,
         ShowTokenUsage = ShowTokenUsage,
+        EnableModelActions = EnableModelActions,
         EnableTextToSpeech = EnableTextToSpeech,
         TtsProvider = TtsProvider,
         TtsBaseUrl = TtsBaseUrl,

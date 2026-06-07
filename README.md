@@ -15,6 +15,7 @@ endpoint or MiniMax's HTTP T2A endpoint.
 - Provides an in-game WPF settings window.
 - Supports optional TTS playback for LLM replies.
 - Supports `OpenAI-compatible` and `MiniMax` TTS providers.
+- Supports safe model-selected actions through a whitelist.
 - Uses VPet's `PlayVoice` path for audio playback.
 - Caches generated voice files under the plugin directory.
 
@@ -75,6 +76,19 @@ Chat settings:
 - `apiKeyEnvironmentVariable`: defaults to `VPET_LLM_API_KEY`.
 - `systemPrompt`: pet persona prompt.
 - `temperature`, `maxTokens`, `keepHistoryTurns`, `timeoutSeconds`.
+- `enableModelActions`: lets the model request whitelisted game actions.
+
+Model actions:
+
+When model actions are enabled, the model may return a JSON object with a
+`reply` and optional `actions`. The plugin only executes known safe actions:
+
+- `open_chat`
+- `open_llm_settings`
+- `open_game_settings`
+- `open_gallery`
+- `set_zoom` with `args.level` clamped to `0.5` through `2.0`
+- `play_tts` with short `args.text`
 
 TTS settings:
 
