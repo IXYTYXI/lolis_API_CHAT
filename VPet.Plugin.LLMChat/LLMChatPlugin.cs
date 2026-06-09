@@ -93,6 +93,8 @@ public sealed class LLMChatPlugin : MainPlugin
     private bool _toolbarButtonsRegistered;
     private bool _modConfigMenuRegistered;
     private bool _stateNeedHandlerRegistered;
+    private bool _touchSpeechRegistered;
+    private bool _llmWorksRegistered;
     private LLMChatInputWindow? _chatInputWindow;
     private string? _lastShoppingItemName;
     private Food.FoodType? _lastShoppingType;
@@ -104,6 +106,7 @@ public sealed class LLMChatPlugin : MainPlugin
     private DateTime _lastStateNeedPromptAt = DateTime.MinValue;
     private string _lastStateNeedKey = string.Empty;
     private DateTime _lastActivitySuggestionAt = DateTime.Now;
+    private DateTime _lastTouchSpeechAt = DateTime.MinValue;
 
     public override string PluginName => "LLM Chat";
 
@@ -129,6 +132,8 @@ public sealed class LLMChatPlugin : MainPlugin
         MW.TalkAPI.Add(ChatTalkApi);
 
         AddStateNeedHandler();
+        AddTouchSpeechHandler();
+        AddLLMWorkDefinitions();
         AddModConfigMenuEntrance();
     }
 
@@ -137,6 +142,8 @@ public sealed class LLMChatPlugin : MainPlugin
         AddToolbarEntrances();
         AddModConfigMenuEntrance();
         AddStateNeedHandler();
+        AddTouchSpeechHandler();
+        AddLLMWorkDefinitions();
     }
 
     public override void GameLoaded()
@@ -144,6 +151,8 @@ public sealed class LLMChatPlugin : MainPlugin
         AddToolbarEntrances();
         AddModConfigMenuEntrance();
         AddStateNeedHandler();
+        AddTouchSpeechHandler();
+        AddLLMWorkDefinitions();
     }
 
     public override void Save()
@@ -287,6 +296,221 @@ public sealed class LLMChatPlugin : MainPlugin
             MaybeSuggestActivity();
         };
         _stateNeedHandlerRegistered = true;
+    }
+
+    private void AddTouchSpeechHandler()
+    {
+        if (_touchSpeechRegistered)
+        {
+            return;
+        }
+
+        MW.Main.Event_TouchHead += OnPetTouchHead;
+        MW.Main.Event_TouchBody += OnPetTouchBody;
+        _touchSpeechRegistered = true;
+    }
+
+    private void AddLLMWorkDefinitions()
+    {
+        if (_llmWorksRegistered)
+        {
+            return;
+        }
+
+        try
+        {
+            var works = MW.Core.Graph.GraphConfig.Works;
+            var indoorGraph = ResolveWorkGraphName();
+            var outdoorGraph = ResolveSleepGraphName(indoorGraph);
+            foreach (var work in CreateLLMWorkDefinitions(indoorGraph, outdoorGraph))
+            {
+                if (works.Any(existing => WorkNameMatches(existing, work.Name)))
+                {
+                    continue;
+                }
+
+                works.Add(work);
+            }
+
+            _llmWorksRegistered = true;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to add LLM work definitions: {ex}");
+        }
+    }
+
+    private void OnPetTouchHead()
+    {
+        SpeakForTouch(isHead: true);
+    }
+
+    private void OnPetTouchBody()
+    {
+        SpeakForTouch(isHead: false);
+    }
+
+    private void SpeakForTouch(bool isHead)
+    {
+        var now = DateTime.Now;
+        if (now - _lastTouchSpeechAt < TimeSpan.FromSeconds(8))
+        {
+            return;
+        }
+
+        _lastTouchSpeechAt = now;
+        var text = BuildTouchSpeech(isHead);
+        MW.Main.SayRnd(text, true, "LLM Chat");
+        QueueSpeak(text);
+        RecordShortMemory(isHead ? "摸头" : "触碰", text);
+    }
+
+    private string BuildTouchSpeech(bool isHead)
+    {
+        if (MW.Main.State == VPet_Simulator.Core.Main.WorkingState.Work && MW.Main.NowWork != null)
+        {
+            return $"主人，我还在认真做「{GetWorkDisplayName(MW.Main.NowWork)}」呢，摸一下就更有精神了。";
+        }
+
+        if (MW.Main.State == VPet_Simulator.Core.Main.WorkingState.Sleep)
+        {
+            return "唔...萝莉斯在休息，主人声音小一点点。";
+        }
+
+        var headTexts = new[]
+        {
+            "嘿嘿，主人摸头的话，萝莉斯会开心一点。",
+            "嗯，在这里呢，主人。",
+            "被主人摸头了，感觉今天也能好好努力。"
+        };
+        var bodyTexts = new[]
+        {
+            "呀，主人叫我吗？",
+            "萝莉斯有好好待在桌面上哦。",
+            "主人戳到我啦，要聊天还是要一起做点什么？"
+        };
+        var source = isHead ? headTexts : bodyTexts;
+        return source[Random.Shared.Next(source.Length)];
+    }
+
+    private IEnumerable<GraphHelper.Work> CreateLLMWorkDefinitions(string indoorGraph, string outdoorGraph)
+    {
+        yield return CreateLLMWork(
+            "LLM写代码接单",
+            indoorGraph,
+            moneyBase: 4.2,
+            strengthFood: 0.75,
+            strengthDrink: 0.95,
+            feeling: 0.35,
+            levelLimit: 1,
+            minutes: 20,
+            finishBonus: 1.05,
+            isOutdoor: false);
+        yield return CreateLLMWork(
+            "LLM修Bug外包",
+            indoorGraph,
+            moneyBase: 5.6,
+            strengthFood: 1.0,
+            strengthDrink: 1.15,
+            feeling: 0.55,
+            levelLimit: 3,
+            minutes: 25,
+            finishBonus: 1.12,
+            isOutdoor: false);
+        yield return CreateLLMWork(
+            "LLM整理需求文档",
+            indoorGraph,
+            moneyBase: 3.6,
+            strengthFood: 0.65,
+            strengthDrink: 0.8,
+            feeling: 0.25,
+            levelLimit: 1,
+            minutes: 18,
+            finishBonus: 1.0,
+            isOutdoor: false);
+        yield return CreateLLMWork(
+            "LLM户外传单兼职",
+            outdoorGraph,
+            moneyBase: 4.8,
+            strengthFood: 1.2,
+            strengthDrink: 1.45,
+            feeling: 0.45,
+            levelLimit: 2,
+            minutes: 24,
+            finishBonus: 1.08,
+            isOutdoor: true);
+        yield return CreateLLMWork(
+            "LLM户外灵感采风",
+            outdoorGraph,
+            moneyBase: 3.9,
+            strengthFood: 1.0,
+            strengthDrink: 1.25,
+            feeling: 0.15,
+            levelLimit: 1,
+            minutes: 22,
+            finishBonus: 1.05,
+            isOutdoor: true);
+    }
+
+    private static GraphHelper.Work CreateLLMWork(
+        string name,
+        string graph,
+        double moneyBase,
+        double strengthFood,
+        double strengthDrink,
+        double feeling,
+        int levelLimit,
+        int minutes,
+        double finishBonus,
+        bool isOutdoor)
+    {
+        return new GraphHelper.Work
+        {
+            Type = GraphHelper.Work.WorkType.Work,
+            Name = name,
+            Graph = graph,
+            MoneyBase = moneyBase,
+            StrengthFood = strengthFood,
+            StrengthDrink = strengthDrink,
+            Feeling = feeling,
+            LevelLimit = levelLimit,
+            Time = minutes,
+            FinishBonus = finishBonus,
+            BorderBrush = isOutdoor ? "2E7D32" : "1565C0",
+            Background = isOutdoor ? "C8E6C9" : "BBDEFB",
+            ButtonBackground = isOutdoor ? "2E7D32" : "1565C0",
+            ButtonForeground = "ffffff",
+            Foreground = isOutdoor ? "1B5E20" : "0D47A1",
+            Left = 100,
+            Top = 160,
+            Width = 300
+        };
+    }
+
+    private string ResolveWorkGraphName()
+    {
+        var graph = MW.Core.Graph.FindName(GraphInfo.GraphType.Work);
+        if (!string.IsNullOrWhiteSpace(graph))
+        {
+            return graph;
+        }
+
+        return MW.Core.Graph.GraphConfig.Works
+            .Select(work => work.Graph)
+            .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name))
+            ?? "work";
+    }
+
+    private string ResolveSleepGraphName(string fallbackGraph)
+    {
+        var graph = MW.Core.Graph.FindName(GraphInfo.GraphType.Sleep);
+        return string.IsNullOrWhiteSpace(graph) ? fallbackGraph : graph;
+    }
+
+    private static bool WorkNameMatches(GraphHelper.Work work, string name)
+    {
+        return string.Equals(work.Name, name, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(work.NameTrans, name, StringComparison.OrdinalIgnoreCase);
     }
 
     private void MaybeSpeakStateNeed()

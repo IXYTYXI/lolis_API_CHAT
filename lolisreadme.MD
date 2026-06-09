@@ -14,6 +14,8 @@ The desired UX is an in-game pet companion:
 - Chat from the toolbar or VPet talk API.
 - Configure API/TTS from an in-game settings window.
 - Let the model request whitelisted game actions only.
+- Let normal pet touches produce local speech bubbles and TTS when configured.
+- Add reasonable money-earning jobs so shopping is balanced by income.
 - Preserve player agency for spending money: the model may suggest or ask, but
   direct purchases should only happen after the player asks or confirms.
 
@@ -51,7 +53,7 @@ that directory has held stale DLLs during development.
 
 - `VPet.Plugin.LLMChat/LLMChatPlugin.cs`: plugin entry, settings lifecycle,
   toolbar/settings menu entries, TTS playback, model action execution, game API
-  calls, Better Buy purchase logic.
+  calls, touch speech, extra work definitions, Better Buy purchase logic.
 - `VPet.Plugin.LLMChat/LLMChatTalkAPI.cs`: VPet `TalkBox` integration and the
   action prompt sent to the model.
 - `VPet.Plugin.LLMChat/LLMChatActionParser.cs`: extracts JSON action plans from
@@ -162,6 +164,48 @@ Current proactive state behavior:
 - It throttles prompts globally to 20 minutes and same-need prompts to 60
   minutes.
 - These proactive prompts do not call the LLM; they are local and cheap.
+
+Current touch speech behavior:
+
+- The plugin subscribes to `MW.Main.Event_TouchHead` and
+  `MW.Main.Event_TouchBody`.
+- A local short line is shown with `MW.Main.SayRnd(...)`.
+- The same line is passed to `QueueSpeak(...)`, so it uses the configured TTS
+  provider when TTS is enabled.
+- Touch speech is throttled to once per 8 seconds.
+- It does not call the LLM, so touch interactions do not spend API tokens.
+
+## Extra Money Jobs
+
+The plugin appends several runtime work entries to
+`MW.Core.Graph.GraphConfig.Works`:
+
+- `LLM写代码接单`
+- `LLM修Bug外包`
+- `LLM整理需求文档`
+- `LLM户外传单兼职`
+- `LLM户外灵感采风`
+
+All are `GraphHelper.Work.WorkType.Work`, so they earn money rather than EXP.
+They use VPet's normal `Main.FunctionSpend` formula through `MoneyBase`,
+duration, hunger/thirst consumption, and mood consumption; the plugin does not
+directly add money.
+
+Animation behavior:
+
+- Indoor jobs resolve `MW.Core.Graph.FindName(GraphInfo.GraphType.Work)` first,
+  so they use the current pet's available work/coding-style animation where the
+  skin provides it.
+- Outdoor jobs resolve `MW.Core.Graph.FindName(GraphInfo.GraphType.Sleep)` and
+  intentionally use the sleep animation as requested.
+- If a graph name is missing, the plugin falls back to the first existing work
+  graph or `"work"`.
+
+Duplicate prevention:
+
+- Extra work entries are added once per plugin instance.
+- Existing work names are checked before inserting so repeated lifecycle hooks
+  do not duplicate the list.
 
 MiniMax / compatible TTS notes from testing:
 

@@ -18,6 +18,8 @@ endpoint or MiniMax's HTTP T2A endpoint.
 - Supports safe model-selected actions through a whitelist.
 - Tracks local short memory, long memory, preferences, and daily diary context.
 - Lets the pet suggest a work/study/play activity and wait for player confirmation.
+- Speaks short local lines with TTS when the pet is touched.
+- Adds several LLM-themed money-earning jobs to reduce pure consumption loops.
 - Uses VPet's `PlayVoice` path for audio playback.
 - Caches generated voice files under the plugin directory.
 
@@ -144,6 +146,22 @@ clears the pending item; asking to switch picks a new random item.
 Activity context works similarly. If the user asks what the pet wants to do, the
 plugin chooses a suitable work/study/play entry from the actual VPet activity
 list, asks for confirmation, and only starts it after the player agrees.
+
+Touch speech:
+
+- The plugin listens to VPet head/body touch events.
+- Touch responses are local short lines, displayed through `SayRnd` and spoken
+  through the configured TTS path when TTS is enabled.
+- Touch speech is throttled to avoid voice spam.
+
+LLM jobs:
+
+- The plugin appends several `LLM` money-earning work entries to VPet's current
+  work list at runtime.
+- Indoor jobs use the current pet's work/coding-style animation when available.
+- Outdoor jobs use the current pet's sleep animation as requested.
+- Earnings still use VPet's normal work formula through `MoneyBase`, duration,
+  and state consumption; the plugin does not directly grant money.
 
 TTS settings:
 
