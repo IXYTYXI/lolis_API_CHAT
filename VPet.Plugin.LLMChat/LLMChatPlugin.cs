@@ -14,6 +14,8 @@ public sealed class LLMChatPlugin : MainPlugin
     private const string PersonalityFileName = "LolisPersonality.md";
     private const string ShortMemoryFileName = "LolisShortMemory.json";
     private const string LongMemoryFileName = "LolisLongMemory.md";
+    private const string PreferencesFileName = "LolisPreferences.json";
+    private const string DiaryFileName = "LolisDiary.md";
     private const int MaxPersonalityPromptLength = 6000;
     private const string DefaultPersonalityPrompt = """
 # 萝莉斯本地人设
@@ -48,6 +50,8 @@ public sealed class LLMChatPlugin : MainPlugin
 - 如果主人问“你想要什么”，要让插件随机挑一个商品，而不是自己编造商品。
 - 主人同意后才购买；主人拒绝时要自然接受。
 - 主人让你工作、学习、娱乐时，可以使用游戏动作去执行。
+- 如果主人问“你想做什么”，要让插件从当前真实工作/学习/娱乐列表里挑一个，再征求主人同意。
+- 可以偶尔表达自己想去学习、工作或娱乐，但开始前要等主人确认。
 - 如果状态不好，要优先提醒休息、吃东西、喝水或停止工作。
 
 ## 边界
@@ -80,6 +84,10 @@ public sealed class LLMChatPlugin : MainPlugin
 
     public string LongMemoryPath { get; private set; } = string.Empty;
 
+    public string PreferencesPath { get; private set; } = string.Empty;
+
+    public string DiaryPath { get; private set; } = string.Empty;
+
     private readonly SemaphoreSlim _speechLock = new(1, 1);
     private LLMChatMemoryStore? _memoryStore;
     private bool _toolbarButtonsRegistered;
@@ -91,8 +99,11 @@ public sealed class LLMChatPlugin : MainPlugin
     private int _lastShoppingCount;
     private string? _pendingWantedItemName;
     private Food.FoodType? _pendingWantedItemType;
+    private string? _pendingActivityName;
+    private GraphHelper.Work.WorkType? _pendingActivityType;
     private DateTime _lastStateNeedPromptAt = DateTime.MinValue;
     private string _lastStateNeedKey = string.Empty;
+    private DateTime _lastActivitySuggestionAt = DateTime.Now;
 
     public override string PluginName => "LLM Chat";
 
@@ -103,9 +114,11 @@ public sealed class LLMChatPlugin : MainPlugin
         PersonalityPath = Path.Combine(ExtensionValue.BaseDirectory, PersonalityFileName);
         ShortMemoryPath = Path.Combine(ExtensionValue.BaseDirectory, ShortMemoryFileName);
         LongMemoryPath = Path.Combine(ExtensionValue.BaseDirectory, LongMemoryFileName);
+        PreferencesPath = Path.Combine(ExtensionValue.BaseDirectory, PreferencesFileName);
+        DiaryPath = Path.Combine(ExtensionValue.BaseDirectory, DiaryFileName);
         Directory.CreateDirectory(VoiceCacheDirectory);
         EnsurePersonalityFile();
-        _memoryStore = new LLMChatMemoryStore(ShortMemoryPath, LongMemoryPath);
+        _memoryStore = new LLMChatMemoryStore(ShortMemoryPath, LongMemoryPath, PreferencesPath, DiaryPath);
         _memoryStore.EnsureFiles();
 
         Settings = LLMChatSettings.LoadOrCreate(SettingsPath);
@@ -190,6 +203,12 @@ public sealed class LLMChatPlugin : MainPlugin
     public void RecordShortMemory(string kind, string text)
     {
         _memoryStore?.RecordShortEvent(kind, text);
+        _memoryStore?.WriteDailyDiaryIfNeeded(BuildAutomaticDiaryText);
+    }
+
+    private void RecordPreference(string category, string name, int count = 1)
+    {
+        _memoryStore?.RecordPreference(category, name, count);
     }
 
     private void RememberLongTerm(string text)
@@ -201,6 +220,14 @@ public sealed class LLMChatPlugin : MainPlugin
 
         _memoryStore?.AppendLongMemory(text);
         RecordShortMemory("长期记忆", text);
+    }
+
+    private string BuildAutomaticDiaryText()
+    {
+        var save = MW.Core.Save;
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"- 今天和主人待在一起。当前心情 {save.Feeling:0.##}/{save.FeelingMax:0.##}，体力 {save.Strength:0.##}/{save.StrengthMax:0.##}，饱腹 {save.StrengthFood:0.##}，口渴 {save.StrengthDrink:0.##}，好感度 {save.Likability:0.##}。\n- 如果今天发生了聊天、购物、学习、工作或娱乐，它们会继续写进短期记忆和偏好统计。");
     }
 
     private void EnsurePersonalityFile()
@@ -254,7 +281,11 @@ public sealed class LLMChatPlugin : MainPlugin
             return;
         }
 
-        MW.Main.TimeUIHandle += _ => MaybeSpeakStateNeed();
+        MW.Main.TimeUIHandle += _ =>
+        {
+            MaybeSpeakStateNeed();
+            MaybeSuggestActivity();
+        };
         _stateNeedHandlerRegistered = true;
     }
 
@@ -277,6 +308,39 @@ public sealed class LLMChatPlugin : MainPlugin
         MW.Main.SayRnd(text, true, "LLM Chat");
         QueueSpeak(text);
         RecordShortMemory("主动状态", text);
+    }
+
+    private void MaybeSuggestActivity()
+    {
+        if (!MW.Core.Controller.EnableFunction
+            || MW.Main.State == VPet_Simulator.Core.Main.WorkingState.Work
+            || !string.IsNullOrWhiteSpace(_pendingActivityName)
+            || TryGetStateNeedPrompt(out _, out _))
+        {
+            return;
+        }
+
+        var now = DateTime.Now;
+        if (now - _lastActivitySuggestionAt < TimeSpan.FromMinutes(60))
+        {
+            return;
+        }
+
+        if (!TryPickSuggestedActivity(
+                GraphHelper.Work.WorkType.Work,
+                allowPreferredTypeOnly: false,
+                out var work,
+                out var reason))
+        {
+            return;
+        }
+
+        _lastActivitySuggestionAt = now;
+        SetPendingActivity(work);
+        var message = BuildActivitySuggestionMessage(work, reason);
+        MW.Main.SayRnd(message, true, "LLM Chat");
+        QueueSpeak(message);
+        RecordShortMemory("想做事情", message);
     }
 
     private bool TryGetStateNeedPrompt(out string key, out string text)
@@ -439,6 +503,17 @@ public sealed class LLMChatPlugin : MainPlugin
                     ExecuteStartWorkAction(action.Args, GraphHelper.Work.WorkType.Play);
                     break;
 
+                case "pick_activity":
+                case "choose_activity":
+                case "suggest_activity":
+                    ExecutePickActivityAction(action.Args);
+                    break;
+
+                case "clear_pending_activity":
+                case "decline_activity":
+                    ClearPendingActivity();
+                    break;
+
                 case "stop_work":
                 case "stop_current_work":
                     ExecuteStopWorkAction();
@@ -540,6 +615,14 @@ public sealed class LLMChatPlugin : MainPlugin
             builder.Append(CultureInfo.InvariantCulture,
                 $"[当前工作上下文]\n正在进行: {GetWorkDisplayName(MW.Main.NowWork)}, 类型: {TranslateWorkType(MW.Main.NowWork.Type)}, 剩余约 {GetRemainingWorkMinutes(MW.Main.NowWork):0.#} 分钟. ");
             builder.Append("如果用户要求停止当前工作/学习/娱乐，用 stop_work；如果用户要求换到新项目，直接用 start_work/start_study/start_play，插件会先停止当前项再切换。");
+        }
+
+        if (!string.IsNullOrWhiteSpace(_pendingActivityName) && _pendingActivityType.HasValue)
+        {
+            builder.AppendLine();
+            builder.Append(CultureInfo.InvariantCulture,
+                $"[想做事情上下文]\n桌宠刚提出想去{TranslateWorkType(_pendingActivityType.Value)}「{_pendingActivityName}」。 ");
+            builder.Append("如果用户同意、说“好/可以/去吧/开始吧”，用对应 start_work/start_study/start_play 且可不传 name；如果用户拒绝、说“算了/不要/先不”，用 clear_pending_activity；如果用户说“换一个/重新选/再想一个”，用 pick_activity。");
         }
 
         if (!string.IsNullOrWhiteSpace(_pendingWantedItemName))
@@ -710,18 +793,21 @@ public sealed class LLMChatPlugin : MainPlugin
     {
         Application.Current.Dispatcher.Invoke(() =>
         {
-            if (!TryReadString(args, "name", out var workName)
-                && !TryReadString(args, "work", out workName)
-                && !TryReadString(args, "activity", out workName))
+            GraphHelper.Work? work;
+            if (TryReadString(args, "name", out var workName)
+                || TryReadString(args, "work", out workName)
+                || TryReadString(args, "activity", out workName))
+            {
+                work = FindWorkByName(workName, preferredType);
+                if (work == null)
+                {
+                    MW.Main.SayRnd($"没有找到名为「{LimitLength(workName, 24)}」的{TranslateWorkType(preferredType)}。", true, "LLM Chat");
+                    return;
+                }
+            }
+            else if (!TryGetPendingActivity(preferredType, out work))
             {
                 MW.Main.SayRnd($"想开始哪个{TranslateWorkType(preferredType)}？", true, "LLM Chat");
-                return;
-            }
-
-            var work = FindWorkByName(workName, preferredType);
-            if (work == null)
-            {
-                MW.Main.SayRnd($"没有找到名为「{LimitLength(workName, 24)}」的{TranslateWorkType(preferredType)}。", true, "LLM Chat");
                 return;
             }
 
@@ -749,6 +835,34 @@ public sealed class LLMChatPlugin : MainPlugin
         });
     }
 
+    private void ExecutePickActivityAction(IReadOnlyDictionary<string, string> args)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            if (MW.Main.State == VPet_Simulator.Core.Main.WorkingState.Work && MW.Main.NowWork != null)
+            {
+                MW.Main.SayRnd($"现在正在进行「{GetWorkDisplayName(MW.Main.NowWork)}」，先不换新的啦。", true, "LLM Chat");
+                return;
+            }
+
+            var preferredType = GraphHelper.Work.WorkType.Work;
+            var allowPreferredTypeOnly = TryReadString(args, "type", out var rawType)
+                && TryParseWorkType(rawType, out preferredType);
+
+            if (!TryPickSuggestedActivity(preferredType, allowPreferredTypeOnly, out var work, out var reason))
+            {
+                MW.Main.SayRnd("现在没有找到适合我去做的工作、学习或娱乐。", true, "LLM Chat");
+                return;
+            }
+
+            SetPendingActivity(work);
+            var message = BuildActivitySuggestionMessage(work, reason);
+            MW.Main.SayRnd(message, true, "LLM Chat");
+            QueueSpeak(message);
+            RecordShortMemory("想做事情", message);
+        });
+    }
+
     private void ExecuteStopWorkAction()
     {
         Application.Current.Dispatcher.Invoke(() =>
@@ -766,11 +880,150 @@ public sealed class LLMChatPlugin : MainPlugin
         });
     }
 
+    private bool TryPickSuggestedActivity(
+        GraphHelper.Work.WorkType preferredType,
+        bool allowPreferredTypeOnly,
+        out GraphHelper.Work work,
+        out string reason)
+    {
+        work = null!;
+        reason = string.Empty;
+
+        if (!MW.Core.Controller.EnableFunction || MW.Core.Save.Mode == IGameSave.ModeType.Ill)
+        {
+            return false;
+        }
+
+        if (allowPreferredTypeOnly)
+        {
+            var preferred = GetEligibleWorks(preferredType);
+            if (preferred.Length == 0)
+            {
+                return false;
+            }
+
+            work = PickRandom(preferred);
+            reason = $"我想{TranslateWorkType(preferredType)}一下";
+            return true;
+        }
+
+        var save = MW.Core.Save;
+        var preferredTypes = new List<GraphHelper.Work.WorkType>();
+        if (save.Feeling <= 45)
+        {
+            preferredTypes.Add(GraphHelper.Work.WorkType.Play);
+            reason = "心情有点需要活动一下";
+        }
+        else if (save.Strength <= 30 || save.StrengthFood <= 40 || save.StrengthDrink <= 40)
+        {
+            preferredTypes.Add(GraphHelper.Work.WorkType.Play);
+            reason = "现在不太适合太辛苦";
+        }
+        else
+        {
+            preferredTypes.Add(GraphHelper.Work.WorkType.Study);
+            preferredTypes.Add(GraphHelper.Work.WorkType.Work);
+            preferredTypes.Add(GraphHelper.Work.WorkType.Play);
+            reason = "现在状态还不错";
+        }
+
+        foreach (var type in preferredTypes.OrderBy(_ => Random.Shared.Next()))
+        {
+            var works = GetEligibleWorks(type);
+            if (works.Length == 0)
+            {
+                continue;
+            }
+
+            work = PickRandom(works);
+            return true;
+        }
+
+        var fallback = GetEligibleWorks(GraphHelper.Work.WorkType.Work)
+            .Concat(GetEligibleWorks(GraphHelper.Work.WorkType.Study))
+            .Concat(GetEligibleWorks(GraphHelper.Work.WorkType.Play))
+            .ToArray();
+        if (fallback.Length == 0)
+        {
+            return false;
+        }
+
+        work = PickRandom(fallback);
+        reason = "我想自己找点事情做";
+        return true;
+    }
+
+    private GraphHelper.Work[] GetEligibleWorks(GraphHelper.Work.WorkType type)
+    {
+        MW.Main.WorkList(out var works, out var studies, out var plays);
+        return SelectWorksByType(type, works, studies, plays)
+            .Where(work => MW.Core.Save.Level >= work.LevelLimit)
+            .Where(work => !string.IsNullOrWhiteSpace(GetWorkDisplayName(work)))
+            .ToArray();
+    }
+
+    private static GraphHelper.Work PickRandom(IReadOnlyList<GraphHelper.Work> works)
+    {
+        return works[Random.Shared.Next(works.Count)];
+    }
+
+    private string BuildActivitySuggestionMessage(GraphHelper.Work work, string reason)
+    {
+        var prefix = string.IsNullOrWhiteSpace(reason) ? "我想找点事情做" : reason;
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"主人，{prefix}，想去{TranslateWorkType(work.Type)}「{GetWorkDisplayName(work)}」（Lv {work.LevelLimit}，{work.Time} 分钟），可以吗？");
+    }
+
+    private void SetPendingActivity(GraphHelper.Work work)
+    {
+        _pendingActivityName = GetWorkDisplayName(work);
+        _pendingActivityType = work.Type;
+    }
+
+    private void ClearPendingActivity()
+    {
+        _pendingActivityName = null;
+        _pendingActivityType = null;
+    }
+
+    private bool TryGetPendingActivity(GraphHelper.Work.WorkType preferredType, out GraphHelper.Work work)
+    {
+        work = null!;
+        if (string.IsNullOrWhiteSpace(_pendingActivityName))
+        {
+            return false;
+        }
+
+        var pending = FindWorkByName(_pendingActivityName, _pendingActivityType ?? preferredType);
+        if (pending == null)
+        {
+            return false;
+        }
+
+        work = pending;
+        return true;
+    }
+
+    private bool IsPendingActivity(GraphHelper.Work work)
+    {
+        return !string.IsNullOrWhiteSpace(_pendingActivityName)
+            && _pendingActivityType == work.Type
+            && WorkMatches(work, NormalizeText(_pendingActivityName));
+    }
+
     private void StartWorkAndReport(GraphHelper.Work work, string successMessage)
     {
         if (MW.Main.StartWork(work))
         {
             MW.Main.SayRnd(successMessage, true, "LLM Chat");
+            RecordPreference("常做活动", $"{TranslateWorkType(work.Type)}：{GetWorkDisplayName(work)}");
+            RecordPreference("活动类型", TranslateWorkType(work.Type));
+            RecordShortMemory("活动", successMessage);
+            if (IsPendingActivity(work))
+            {
+                ClearPendingActivity();
+            }
         }
         else
         {
@@ -945,12 +1198,16 @@ public sealed class LLMChatPlugin : MainPlugin
             MW.TakeItemHandle(food, count, "betterbuy");
             MW.DisplayFoodAnimation(food.GetGraph(), food.ImageSource);
             RememberShoppingItem(food, count);
+            RecordPreference("常买商品", GetFoodDisplayName(food), count);
+            RecordPreference("常买分类", TranslateFoodType(food.Type), count);
             if (clearsPendingWantedItem)
             {
                 ClearWantedItem();
             }
 
-            MW.Main.SayRnd($"已在更好买购买并使用 {count} 个「{GetFoodDisplayName(food)}」，花费 {price * count:0.##}。", true, "LLM Chat");
+            var message = $"已在更好买购买并使用 {count} 个「{GetFoodDisplayName(food)}」，花费 {price * count:0.##}。";
+            RecordShortMemory("购买", message);
+            MW.Main.SayRnd(message, true, "LLM Chat");
         });
     }
 
@@ -1079,6 +1336,33 @@ public sealed class LLMChatPlugin : MainPlugin
                 return true;
             default:
                 type = Food.FoodType.Food;
+                return false;
+        }
+    }
+
+    private static bool TryParseWorkType(string raw, out GraphHelper.Work.WorkType type)
+    {
+        switch (NormalizeActionName(raw))
+        {
+            case "work":
+            case "job":
+            case "工作":
+                type = GraphHelper.Work.WorkType.Work;
+                return true;
+            case "study":
+            case "learn":
+            case "学习":
+                type = GraphHelper.Work.WorkType.Study;
+                return true;
+            case "play":
+            case "game":
+            case "fun":
+            case "娱乐":
+            case "玩":
+                type = GraphHelper.Work.WorkType.Play;
+                return true;
+            default:
+                type = GraphHelper.Work.WorkType.Work;
                 return false;
         }
     }

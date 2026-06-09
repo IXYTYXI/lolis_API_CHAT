@@ -11,9 +11,12 @@ public sealed class LLMChatMemoryStore
     private const int MaxShortEvents = 40;
     private const int PromptShortEvents = 18;
     private const int MaxLongMemoryPromptLength = 6000;
+    private const int MaxDiaryPromptLength = 3500;
     private readonly object _sync = new();
     private readonly string _shortMemoryPath;
     private readonly string _longMemoryPath;
+    private readonly string _preferencesPath;
+    private readonly string _diaryPath;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -22,10 +25,16 @@ public sealed class LLMChatMemoryStore
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    public LLMChatMemoryStore(string shortMemoryPath, string longMemoryPath)
+    public LLMChatMemoryStore(
+        string shortMemoryPath,
+        string longMemoryPath,
+        string preferencesPath,
+        string diaryPath)
     {
         _shortMemoryPath = shortMemoryPath;
         _longMemoryPath = longMemoryPath;
+        _preferencesPath = preferencesPath;
+        _diaryPath = diaryPath;
     }
 
     public void EnsureFiles()
@@ -34,6 +43,8 @@ public sealed class LLMChatMemoryStore
         {
             EnsureDirectory(_shortMemoryPath);
             EnsureDirectory(_longMemoryPath);
+            EnsureDirectory(_preferencesPath);
+            EnsureDirectory(_diaryPath);
 
             if (!File.Exists(_shortMemoryPath))
             {
@@ -43,6 +54,16 @@ public sealed class LLMChatMemoryStore
             if (!File.Exists(_longMemoryPath))
             {
                 File.WriteAllText(_longMemoryPath, DefaultLongMemory);
+            }
+
+            if (!File.Exists(_preferencesPath))
+            {
+                SavePreferences(new LolisPreferences());
+            }
+
+            if (!File.Exists(_diaryPath))
+            {
+                File.WriteAllText(_diaryPath, DefaultDiary);
             }
         }
     }
@@ -105,6 +126,71 @@ public sealed class LLMChatMemoryStore
         }
     }
 
+    public void RecordPreference(string category, string name, int increment = 1)
+    {
+        if (string.IsNullOrWhiteSpace(category) || string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        lock (_sync)
+        {
+            try
+            {
+                EnsureFiles();
+                var preferences = LoadPreferences();
+                var key = category.Trim();
+                if (!preferences.Counts.TryGetValue(key, out var values))
+                {
+                    values = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                    preferences.Counts[key] = values;
+                }
+
+                var item = LimitSingleLine(name, 80);
+                values.TryGetValue(item, out var existingCount);
+                values[item] = existingCount + Math.Max(1, increment);
+                SavePreferences(preferences);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to record preference: {ex}");
+            }
+        }
+    }
+
+    public void WriteDailyDiaryIfNeeded(Func<string> diaryFactory)
+    {
+        lock (_sync)
+        {
+            try
+            {
+                EnsureFiles();
+                var memory = LoadShortMemory();
+                var today = DateTime.Now.Date;
+                if (memory.LastDiaryDate.Date == today)
+                {
+                    return;
+                }
+
+                var text = diaryFactory().Trim();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    text = BuildFallbackDiaryText(memory);
+                }
+
+                File.AppendAllText(
+                    _diaryPath,
+                    string.Create(CultureInfo.InvariantCulture, $"\n## {today:yyyy-MM-dd}\n\n{text}\n"));
+                memory.LastDiaryDate = today;
+                SaveShortMemory(memory);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to write diary: {ex}");
+            }
+        }
+    }
+
     public string BuildPrompt()
     {
         lock (_sync)
@@ -125,6 +211,28 @@ public sealed class LLMChatMemoryStore
                     builder.AppendLine("[长期记忆]");
                     builder.AppendLine("以下内容来自 LolisLongMemory.md，记录主人偏好、重要事实和长期关系设定：");
                     builder.AppendLine(longMemory);
+                }
+
+                var preferences = BuildPreferencesPrompt();
+                if (!string.IsNullOrWhiteSpace(preferences))
+                {
+                    if (builder.Length > 0)
+                    {
+                        builder.AppendLine();
+                    }
+
+                    builder.AppendLine(preferences);
+                }
+
+                var diary = BuildDiaryPrompt();
+                if (!string.IsNullOrWhiteSpace(diary))
+                {
+                    if (builder.Length > 0)
+                    {
+                        builder.AppendLine();
+                    }
+
+                    builder.AppendLine(diary);
                 }
 
                 var shortMemory = LoadShortMemory();
@@ -166,9 +274,83 @@ public sealed class LLMChatMemoryStore
         return JsonSerializer.Deserialize<LolisShortMemory>(json, JsonOptions) ?? new LolisShortMemory();
     }
 
+    private LolisPreferences LoadPreferences()
+    {
+        if (!File.Exists(_preferencesPath))
+        {
+            return new LolisPreferences();
+        }
+
+        var json = File.ReadAllText(_preferencesPath);
+        return JsonSerializer.Deserialize<LolisPreferences>(json, JsonOptions) ?? new LolisPreferences();
+    }
+
+    private void SavePreferences(LolisPreferences preferences)
+    {
+        File.WriteAllText(_preferencesPath, JsonSerializer.Serialize(preferences, JsonOptions));
+    }
+
     private void SaveShortMemory(LolisShortMemory memory)
     {
         File.WriteAllText(_shortMemoryPath, JsonSerializer.Serialize(memory, JsonOptions));
+    }
+
+    private string BuildPreferencesPrompt()
+    {
+        var preferences = LoadPreferences();
+        if (preferences.Counts.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder();
+        builder.AppendLine("[偏好统计]");
+        builder.AppendLine("以下是萝莉斯从互动中形成的偏好计数，次数越高表示越常发生，不等于绝对喜欢：");
+        foreach (var category in preferences.Counts.OrderBy(pair => pair.Key))
+        {
+            var top = category.Value
+                .OrderByDescending(pair => pair.Value)
+                .ThenBy(pair => pair.Key)
+                .Take(8)
+                .Select(pair => string.Create(CultureInfo.InvariantCulture, $"{pair.Key}({pair.Value})"));
+            builder.Append(category.Key);
+            builder.Append(": ");
+            builder.AppendLine(string.Join("、", top));
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private string BuildDiaryPrompt()
+    {
+        if (!File.Exists(_diaryPath))
+        {
+            return string.Empty;
+        }
+
+        var text = File.ReadAllText(_diaryPath).Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        if (text.Length > MaxDiaryPromptLength)
+        {
+            text = "...\n" + text[^MaxDiaryPromptLength..];
+        }
+
+        return "[日记]\n以下是萝莉斯最近的生活记录：\n" + text;
+    }
+
+    private static string BuildFallbackDiaryText(LolisShortMemory memory)
+    {
+        var recent = memory.RecentEvents.TakeLast(8).Select(item => item.Text).ToArray();
+        if (recent.Length == 0)
+        {
+            return "今天安静地陪在主人身边。";
+        }
+
+        return "今天发生了这些事：" + string.Join("；", recent) + "。";
     }
 
     private static void EnsureDirectory(string path)
@@ -198,9 +380,17 @@ public sealed class LLMChatMemoryStore
 - 不要记录敏感隐私，除非主人明确要求。
 """;
 
+    private const string DefaultDiary = """
+# 萝莉斯日记
+
+这里会自动记录每天发生过的简短生活片段。
+""";
+
     private sealed class LolisShortMemory
     {
         public List<LolisMemoryEvent> RecentEvents { get; set; } = new();
+
+        public DateTime LastDiaryDate { get; set; } = DateTime.MinValue;
     }
 
     private sealed class LolisMemoryEvent
@@ -210,5 +400,10 @@ public sealed class LLMChatMemoryStore
         public string Kind { get; set; } = string.Empty;
 
         public string Text { get; set; } = string.Empty;
+    }
+
+    private sealed class LolisPreferences
+    {
+        public Dictionary<string, Dictionary<string, int>> Counts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 }

@@ -16,6 +16,8 @@ endpoint or MiniMax's HTTP T2A endpoint.
 - Supports optional TTS playback for LLM replies.
 - Supports `OpenAI-compatible` and `MiniMax` TTS providers.
 - Supports safe model-selected actions through a whitelist.
+- Tracks local short memory, long memory, preferences, and daily diary context.
+- Lets the pet suggest a work/study/play activity and wait for player confirmation.
 - Uses VPet's `PlayVoice` path for audio playback.
 - Caches generated voice files under the plugin directory.
 
@@ -28,10 +30,13 @@ endpoint or MiniMax's HTTP T2A endpoint.
 - `VPet.Plugin.LLMChat/OpenAICompatibleTextToSpeechClient.cs`: TTS client.
 - `VPet.Plugin.LLMChat/MiniMaxTextToSpeechClient.cs`: MiniMax TTS client.
 - `VPet.Plugin.LLMChat/LLMChatSettings.cs`: JSON settings model.
+- `VPet.Plugin.LLMChat/LLMChatMemoryStore.cs`: local memory, preferences, and diary storage.
 - `VPet.Plugin.LLMChat/1110_LLMChat/info.lps`: VPet mod metadata.
 - `VPet.Plugin.LLMChat/1110_LLMChat/LolisPersonality.md`: editable local pet personality prompt.
 - `VPet.Plugin.LLMChat/1110_LLMChat/LolisShortMemory.json`: rolling short-term event memory.
 - `VPet.Plugin.LLMChat/1110_LLMChat/LolisLongMemory.md`: editable long-term memory.
+- `VPet.Plugin.LLMChat/1110_LLMChat/LolisPreferences.json`: automatic preference counters.
+- `VPet.Plugin.LLMChat/1110_LLMChat/LolisDiary.md`: automatic daily diary.
 
 ## Local SDK
 
@@ -86,7 +91,10 @@ Memory files:
 - `LolisLongMemory.md` stores durable facts and preferences. The model may append
   to it only through the whitelisted `remember_long_term` action, intended for
   explicit user requests like `记住我喜欢可乐`.
-- Both memory files are read into the prompt on each chat request.
+- `LolisPreferences.json` stores automatic counters for bought items, item
+  categories, activity names, and activity types.
+- `LolisDiary.md` stores one short local diary entry per day.
+- These local context files are read into the prompt on each chat request.
 
 Chat settings:
 
@@ -111,6 +119,8 @@ When model actions are enabled, the model may return a JSON object with a
 - `reset_position`
 - `move_pet` with `args.direction` (`left`, `right`, `up`, `down`) and optional `args.distance`, clamped to safe movement.
 - `start_work`, `start_study`, and `start_play` with `args.name`, resolving the requested activity from VPet's current work/study/play lists and starting it after level, illness, and function-mode checks.
+- `pick_activity`, selecting a suitable work/study/play activity from the current VPet list and asking the player for confirmation.
+- `clear_pending_activity`, clearing the pending activity after the player refuses.
 - `stop_work`, stopping the current work/study/play item with VPet's manual-stop reason.
 - `open_better_buy` with `args.name` or `args.type`, opening VPet's Better Buy page for the matching item category.
 - `pick_wanted_item`, randomly selecting one item from the full current VPet food/item list and asking the player whether to buy it.
@@ -130,6 +140,10 @@ Wanted-item context is also kept in memory. If the user asks the pet what it
 wants, the plugin randomly picks from the full item list and asks for player
 confirmation. Follow-up confirmation buys and uses that item directly; refusal
 clears the pending item; asking to switch picks a new random item.
+
+Activity context works similarly. If the user asks what the pet wants to do, the
+plugin chooses a suitable work/study/play entry from the actual VPet activity
+list, asks for confirmation, and only starts it after the player agrees.
 
 TTS settings:
 
@@ -180,5 +194,7 @@ VPet/mod/1110_LLMChat/LLMChatSetting.json
 VPet/mod/1110_LLMChat/LolisPersonality.md
 VPet/mod/1110_LLMChat/LolisShortMemory.json
 VPet/mod/1110_LLMChat/LolisLongMemory.md
+VPet/mod/1110_LLMChat/LolisPreferences.json
+VPet/mod/1110_LLMChat/LolisDiary.md
 VPet/mod/1110_LLMChat/plugin/VPet.Plugin.LLMChat.dll
 ```

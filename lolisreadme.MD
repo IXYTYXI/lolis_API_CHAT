@@ -39,6 +39,8 @@ VPet/mod/1110_LLMChat/LLMChatSetting.json
 VPet/mod/1110_LLMChat/LolisPersonality.md
 VPet/mod/1110_LLMChat/LolisShortMemory.json
 VPet/mod/1110_LLMChat/LolisLongMemory.md
+VPet/mod/1110_LLMChat/LolisPreferences.json
+VPet/mod/1110_LLMChat/LolisDiary.md
 VPet/mod/1110_LLMChat/plugin/VPet.Plugin.LLMChat.dll
 ```
 
@@ -67,6 +69,10 @@ that directory has held stale DLLs during development.
   memory template.
 - `VPet.Plugin.LLMChat/1110_LLMChat/LolisLongMemory.md`: editable long-term
   memory template.
+- `VPet.Plugin.LLMChat/1110_LLMChat/LolisPreferences.json`: preference counter
+  template for bought items and activity history.
+- `VPet.Plugin.LLMChat/1110_LLMChat/LolisDiary.md`: automatic daily diary
+  template.
 - `VPet.Plugin.LLMChat/1110_LLMChat/info.lps`: mod metadata.
 - `dist/1110_LLMChat/plugin/VPet.Plugin.LLMChat.dll`: built plugin DLL used for
   manual testing in VPet.
@@ -112,30 +118,40 @@ The template currently defines 萝莉斯 as a cute, natural, slightly playful
 desktop pet that calls the user 主人, asks before spending money, and avoids
 inventing unavailable goods, jobs, or features.
 
-## Short And Long Memory
+## Memory, Preferences, And Diary
 
 Runtime files:
 
 ```text
 VPet/mod/1110_LLMChat/LolisShortMemory.json
 VPet/mod/1110_LLMChat/LolisLongMemory.md
+VPet/mod/1110_LLMChat/LolisPreferences.json
+VPet/mod/1110_LLMChat/LolisDiary.md
 ```
 
 Behavior:
 
-- `LLMChatMemoryStore` owns both files.
+- `LLMChatMemoryStore` owns all four files.
 - Short memory records recent events automatically:
   - user messages
   - assistant replies
   - requested model actions
   - state-driven proactive prompts
   - long-memory writes
+  - purchases and started work/study/play activities
 - Short memory keeps at most 40 events and includes the latest 18 in the prompt.
 - Long memory is Markdown and is only appended through `remember_long_term`.
 - The action prompt tells the model to use `remember_long_term` only when the
   user explicitly says to remember something.
-- `LLMChatTalkAPI.BuildPrompt()` prepends both memory prompts before game state
-  and action instructions.
+- Preferences are automatic counters, currently written for:
+  - `常买商品`
+  - `常买分类`
+  - `常做活动`
+  - `活动类型`
+- Diary writes one short local entry per day with current pet status. It is
+  deliberately local and does not call the LLM.
+- `LLMChatTalkAPI.BuildPrompt()` prepends personality, memory, preferences, and
+  diary before game state and action instructions.
 
 Current proactive state behavior:
 
@@ -183,6 +199,8 @@ Only whitelisted actions execute. Current actions:
 - `start_work`
 - `start_study`
 - `start_play`
+- `pick_activity`
+- `clear_pending_activity`
 - `stop_work`
 - `open_better_buy`
 - `pick_wanted_item`
@@ -249,6 +267,27 @@ Pending wanted item is kept in memory:
 
 This is intentionally local-random inside the plugin so the model cannot pretend
 to know inventory or pick unavailable goods.
+
+## Activity Suggestion Flow
+
+The pet can be asked what it wants to do:
+
+- User: "你想做什么？"
+- Model action: `pick_activity`
+- Plugin behavior: select a real activity from `MW.Main.WorkList(...)`, filtered
+  by level and current state, then ask the player for confirmation.
+
+Pending activity is kept in memory:
+
+- User confirms: model should call the matching `start_work`, `start_study`, or
+  `start_play`; the plugin can use the pending activity even if `args.name` is
+  omitted.
+- User refuses: `clear_pending_activity` clears it without starting anything.
+- User asks to switch: `pick_activity` picks another suitable activity.
+
+The plugin may also occasionally suggest an activity locally when status is good
+and no work/study/play is currently running. This suggestion is throttled to once
+per 60 minutes and never starts automatically.
 
 ## Shopping Context
 
