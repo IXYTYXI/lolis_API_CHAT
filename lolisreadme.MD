@@ -37,6 +37,8 @@ Runtime layout in VPet should be:
 VPet/mod/1110_LLMChat/info.lps
 VPet/mod/1110_LLMChat/LLMChatSetting.json
 VPet/mod/1110_LLMChat/LolisPersonality.md
+VPet/mod/1110_LLMChat/LolisShortMemory.json
+VPet/mod/1110_LLMChat/LolisLongMemory.md
 VPet/mod/1110_LLMChat/plugin/VPet.Plugin.LLMChat.dll
 ```
 
@@ -61,6 +63,10 @@ that directory has held stale DLLs during development.
 - `VPet.Plugin.LLMChat/MiniMaxTextToSpeechClient.cs`: MiniMax HTTP T2A client.
 - `VPet.Plugin.LLMChat/1110_LLMChat/LolisPersonality.md`: local editable pet
   personality prompt shipped with the mod.
+- `VPet.Plugin.LLMChat/1110_LLMChat/LolisShortMemory.json`: rolling short-term
+  memory template.
+- `VPet.Plugin.LLMChat/1110_LLMChat/LolisLongMemory.md`: editable long-term
+  memory template.
 - `VPet.Plugin.LLMChat/1110_LLMChat/info.lps`: mod metadata.
 - `dist/1110_LLMChat/plugin/VPet.Plugin.LLMChat.dll`: built plugin DLL used for
   manual testing in VPet.
@@ -105,6 +111,41 @@ Behavior:
 The template currently defines 萝莉斯 as a cute, natural, slightly playful
 desktop pet that calls the user 主人, asks before spending money, and avoids
 inventing unavailable goods, jobs, or features.
+
+## Short And Long Memory
+
+Runtime files:
+
+```text
+VPet/mod/1110_LLMChat/LolisShortMemory.json
+VPet/mod/1110_LLMChat/LolisLongMemory.md
+```
+
+Behavior:
+
+- `LLMChatMemoryStore` owns both files.
+- Short memory records recent events automatically:
+  - user messages
+  - assistant replies
+  - requested model actions
+  - state-driven proactive prompts
+  - long-memory writes
+- Short memory keeps at most 40 events and includes the latest 18 in the prompt.
+- Long memory is Markdown and is only appended through `remember_long_term`.
+- The action prompt tells the model to use `remember_long_term` only when the
+  user explicitly says to remember something.
+- `LLMChatTalkAPI.BuildPrompt()` prepends both memory prompts before game state
+  and action instructions.
+
+Current proactive state behavior:
+
+- The plugin hooks `MW.Main.TimeUIHandle`.
+- If function mode is enabled, it checks health, thirst, hunger, strength, and
+  feeling.
+- It speaks a short local prompt when one is low.
+- It throttles prompts globally to 20 minutes and same-need prompts to 60
+  minutes.
+- These proactive prompts do not call the LLM; they are local and cheap.
 
 MiniMax / compatible TTS notes from testing:
 

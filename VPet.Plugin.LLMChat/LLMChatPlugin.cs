@@ -12,6 +12,8 @@ namespace VPet.Plugin.LLMChat;
 public sealed class LLMChatPlugin : MainPlugin
 {
     private const string PersonalityFileName = "LolisPersonality.md";
+    private const string ShortMemoryFileName = "LolisShortMemory.json";
+    private const string LongMemoryFileName = "LolisLongMemory.md";
     private const int MaxPersonalityPromptLength = 6000;
     private const string DefaultPersonalityPrompt = """
 # 萝莉斯本地人设
@@ -74,15 +76,23 @@ public sealed class LLMChatPlugin : MainPlugin
 
     public string PersonalityPath { get; private set; } = string.Empty;
 
+    public string ShortMemoryPath { get; private set; } = string.Empty;
+
+    public string LongMemoryPath { get; private set; } = string.Empty;
+
     private readonly SemaphoreSlim _speechLock = new(1, 1);
+    private LLMChatMemoryStore? _memoryStore;
     private bool _toolbarButtonsRegistered;
     private bool _modConfigMenuRegistered;
+    private bool _stateNeedHandlerRegistered;
     private LLMChatInputWindow? _chatInputWindow;
     private string? _lastShoppingItemName;
     private Food.FoodType? _lastShoppingType;
     private int _lastShoppingCount;
     private string? _pendingWantedItemName;
     private Food.FoodType? _pendingWantedItemType;
+    private DateTime _lastStateNeedPromptAt = DateTime.MinValue;
+    private string _lastStateNeedKey = string.Empty;
 
     public override string PluginName => "LLM Chat";
 
@@ -91,8 +101,12 @@ public sealed class LLMChatPlugin : MainPlugin
         SettingsPath = Path.Combine(ExtensionValue.BaseDirectory, "LLMChatSetting.json");
         VoiceCacheDirectory = Path.Combine(ExtensionValue.BaseDirectory, "voice-cache");
         PersonalityPath = Path.Combine(ExtensionValue.BaseDirectory, PersonalityFileName);
+        ShortMemoryPath = Path.Combine(ExtensionValue.BaseDirectory, ShortMemoryFileName);
+        LongMemoryPath = Path.Combine(ExtensionValue.BaseDirectory, LongMemoryFileName);
         Directory.CreateDirectory(VoiceCacheDirectory);
         EnsurePersonalityFile();
+        _memoryStore = new LLMChatMemoryStore(ShortMemoryPath, LongMemoryPath);
+        _memoryStore.EnsureFiles();
 
         Settings = LLMChatSettings.LoadOrCreate(SettingsPath);
         ChatClient = new OpenAICompatibleChatClient(Settings);
@@ -101,6 +115,7 @@ public sealed class LLMChatPlugin : MainPlugin
         ChatTalkApi = new LLMChatTalkAPI(this);
         MW.TalkAPI.Add(ChatTalkApi);
 
+        AddStateNeedHandler();
         AddModConfigMenuEntrance();
     }
 
@@ -108,12 +123,14 @@ public sealed class LLMChatPlugin : MainPlugin
     {
         AddToolbarEntrances();
         AddModConfigMenuEntrance();
+        AddStateNeedHandler();
     }
 
     public override void GameLoaded()
     {
         AddToolbarEntrances();
         AddModConfigMenuEntrance();
+        AddStateNeedHandler();
     }
 
     public override void Save()
@@ -165,6 +182,27 @@ public sealed class LLMChatPlugin : MainPlugin
         }
     }
 
+    public string BuildLocalMemoryPrompt()
+    {
+        return _memoryStore?.BuildPrompt() ?? string.Empty;
+    }
+
+    public void RecordShortMemory(string kind, string text)
+    {
+        _memoryStore?.RecordShortEvent(kind, text);
+    }
+
+    private void RememberLongTerm(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        _memoryStore?.AppendLongMemory(text);
+        RecordShortMemory("长期记忆", text);
+    }
+
     private void EnsurePersonalityFile()
     {
         if (string.IsNullOrWhiteSpace(PersonalityPath) || File.Exists(PersonalityPath))
@@ -207,6 +245,82 @@ public sealed class LLMChatPlugin : MainPlugin
             MW.Main.ToolBar.MenuMODConfig.Items.Add(menuItem);
             _modConfigMenuRegistered = true;
         }
+    }
+
+    private void AddStateNeedHandler()
+    {
+        if (_stateNeedHandlerRegistered)
+        {
+            return;
+        }
+
+        MW.Main.TimeUIHandle += _ => MaybeSpeakStateNeed();
+        _stateNeedHandlerRegistered = true;
+    }
+
+    private void MaybeSpeakStateNeed()
+    {
+        if (!MW.Core.Controller.EnableFunction || !TryGetStateNeedPrompt(out var key, out var text))
+        {
+            return;
+        }
+
+        var now = DateTime.Now;
+        if (now - _lastStateNeedPromptAt < TimeSpan.FromMinutes(20)
+            || (key == _lastStateNeedKey && now - _lastStateNeedPromptAt < TimeSpan.FromMinutes(60)))
+        {
+            return;
+        }
+
+        _lastStateNeedPromptAt = now;
+        _lastStateNeedKey = key;
+        MW.Main.SayRnd(text, true, "LLM Chat");
+        QueueSpeak(text);
+        RecordShortMemory("主动状态", text);
+    }
+
+    private bool TryGetStateNeedPrompt(out string key, out string text)
+    {
+        var save = MW.Core.Save;
+        key = string.Empty;
+        text = string.Empty;
+
+        if (save.Health <= 35)
+        {
+            key = "health";
+            text = "主人，我感觉有点不舒服...可以先照顾一下我吗？";
+            return true;
+        }
+
+        if (save.StrengthDrink <= 25)
+        {
+            key = "drink";
+            text = "主人，我有点渴了，可以给我喝点什么吗？";
+            return true;
+        }
+
+        if (save.StrengthFood <= 25)
+        {
+            key = "food";
+            text = "主人，我肚子有点空空的...可以吃点东西吗？";
+            return true;
+        }
+
+        if (save.Strength <= 20)
+        {
+            key = "strength";
+            text = "主人，我体力不太够了，想稍微休息一下。";
+            return true;
+        }
+
+        if (save.Feeling <= 25)
+        {
+            key = "feeling";
+            text = "主人，我心情有点低落...陪我玩一会儿好不好？";
+            return true;
+        }
+
+        return false;
     }
 
     public void QueueSpeak(string text)
@@ -328,6 +442,17 @@ public sealed class LLMChatPlugin : MainPlugin
                 case "stop_work":
                 case "stop_current_work":
                     ExecuteStopWorkAction();
+                    break;
+
+                case "remember_long_term":
+                case "remember":
+                    if (TryReadString(action.Args, "content", out var memoryText)
+                        || TryReadString(action.Args, "text", out memoryText)
+                        || TryReadString(action.Args, "memory", out memoryText))
+                    {
+                        RememberLongTerm(memoryText);
+                    }
+
                     break;
 
                 case "open_better_buy":

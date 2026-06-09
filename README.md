@@ -30,6 +30,8 @@ endpoint or MiniMax's HTTP T2A endpoint.
 - `VPet.Plugin.LLMChat/LLMChatSettings.cs`: JSON settings model.
 - `VPet.Plugin.LLMChat/1110_LLMChat/info.lps`: VPet mod metadata.
 - `VPet.Plugin.LLMChat/1110_LLMChat/LolisPersonality.md`: editable local pet personality prompt.
+- `VPet.Plugin.LLMChat/1110_LLMChat/LolisShortMemory.json`: rolling short-term event memory.
+- `VPet.Plugin.LLMChat/1110_LLMChat/LolisLongMemory.md`: editable long-term memory.
 
 ## Local SDK
 
@@ -76,6 +78,15 @@ Local personality prompt:
   pet's long-term personality and behavior rules.
 - Edit this file to change the pet's name, tone, personality, boundaries, and
   shopping/work preferences without recompiling the mod.
+
+Memory files:
+
+- `LolisShortMemory.json` stores recent conversation/action events. It is updated
+  automatically and trimmed to a small rolling window.
+- `LolisLongMemory.md` stores durable facts and preferences. The model may append
+  to it only through the whitelisted `remember_long_term` action, intended for
+  explicit user requests like `记住我喜欢可乐`.
+- Both memory files are read into the prompt on each chat request.
 
 Chat settings:
 
@@ -167,5 +178,7 @@ Expected runtime layout:
 VPet/mod/1110_LLMChat/info.lps
 VPet/mod/1110_LLMChat/LLMChatSetting.json
 VPet/mod/1110_LLMChat/LolisPersonality.md
+VPet/mod/1110_LLMChat/LolisShortMemory.json
+VPet/mod/1110_LLMChat/LolisLongMemory.md
 VPet/mod/1110_LLMChat/plugin/VPet.Plugin.LLMChat.dll
 ```
