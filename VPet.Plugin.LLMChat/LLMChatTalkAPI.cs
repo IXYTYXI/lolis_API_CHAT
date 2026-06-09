@@ -87,11 +87,15 @@ public sealed class LLMChatTalkAPI : TalkBox
 
     private string BuildPrompt(string userText)
     {
+        var personality = _plugin.BuildLocalPersonalityPrompt();
         var state = _plugin.BuildModelStateSummary(GetLikabilityLabel);
+        var context = string.IsNullOrWhiteSpace(personality)
+            ? state
+            : $"{personality}\n\n{state}";
 
         return _plugin.Settings.EnableModelActions
-            ? $"{state}\n{ActionPrompt}\n用户输入：{userText}"
-            : $"{state}\n{userText}";
+            ? $"{context}\n{ActionPrompt}\n用户输入：{userText}"
+            : $"{context}\n用户输入：{userText}";
     }
 
     private static string GetLikabilityLabel(int likability)

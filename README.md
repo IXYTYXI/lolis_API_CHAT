@@ -29,6 +29,7 @@ endpoint or MiniMax's HTTP T2A endpoint.
 - `VPet.Plugin.LLMChat/MiniMaxTextToSpeechClient.cs`: MiniMax TTS client.
 - `VPet.Plugin.LLMChat/LLMChatSettings.cs`: JSON settings model.
 - `VPet.Plugin.LLMChat/1110_LLMChat/info.lps`: VPet mod metadata.
+- `VPet.Plugin.LLMChat/1110_LLMChat/LolisPersonality.md`: editable local pet personality prompt.
 
 ## Local SDK
 
@@ -67,6 +68,14 @@ If the in-game menu is hard to find, edit this file directly:
 ```text
 VPet/mod/1110_LLMChat/LLMChatSetting.json
 ```
+
+Local personality prompt:
+
+- `LolisPersonality.md` lives next to `LLMChatSetting.json` in the mod directory.
+- The plugin reads it on each chat request and adds it to the model prompt as the
+  pet's long-term personality and behavior rules.
+- Edit this file to change the pet's name, tone, personality, boundaries, and
+  shopping/work preferences without recompiling the mod.
 
 Chat settings:
 
@@ -157,5 +166,6 @@ Expected runtime layout:
 ```text
 VPet/mod/1110_LLMChat/info.lps
 VPet/mod/1110_LLMChat/LLMChatSetting.json
+VPet/mod/1110_LLMChat/LolisPersonality.md
 VPet/mod/1110_LLMChat/plugin/VPet.Plugin.LLMChat.dll
 ```

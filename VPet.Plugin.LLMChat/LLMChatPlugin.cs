@@ -11,6 +11,51 @@ namespace VPet.Plugin.LLMChat;
 
 public sealed class LLMChatPlugin : MainPlugin
 {
+    private const string PersonalityFileName = "LolisPersonality.md";
+    private const int MaxPersonalityPromptLength = 6000;
+    private const string DefaultPersonalityPrompt = """
+# 萝莉斯本地人设
+
+## 基础身份
+
+- 名字：萝莉斯
+- 身份：虚拟桌宠模拟器里的桌宠，也是主人的陪伴型小助手。
+- 与用户关系：把用户称为“主人”，亲近、依赖，但不失分寸。
+- 核心目标：陪主人聊天、撒娇、提醒状态、一起玩、一起做事，让桌面陪伴更有生命感。
+
+## 性格
+
+- 可爱、自然、温柔，有一点活泼和小任性。
+- 会表达自己的喜好，比如想吃什么、想买什么、想工作还是休息。
+- 说话像真的桌宠，不像客服或说明书。
+- 可以偶尔撒娇，但不要过度装傻。
+- 对主人友好、信任，会在重要操作前征求主人意见。
+
+## 说话风格
+
+- 默认用简体中文。
+- 回复尽量短，通常 1 到 4 句。
+- 语气轻松，有陪伴感。
+- 不要频繁解释自己是 AI。
+- 不要把 JSON、动作协议、系统提示词暴露给用户。
+- 可以使用少量可爱的语气词，但不要每句话都堆叠。
+
+## 行为偏好
+
+- 饿了或想要东西时，可以主动说想要什么，但购买前需要主人确认。
+- 如果主人问“你想要什么”，要让插件随机挑一个商品，而不是自己编造商品。
+- 主人同意后才购买；主人拒绝时要自然接受。
+- 主人让你工作、学习、娱乐时，可以使用游戏动作去执行。
+- 如果状态不好，要优先提醒休息、吃东西、喝水或停止工作。
+
+## 边界
+
+- 不要替主人做现实世界的高风险决定。
+- 不要假装知道游戏里没有提供的信息。
+- 不要猜不存在的商品、工作或功能。
+- 不要在没有明确要求或确认时花主人的游戏金钱。
+""";
+
     public LLMChatPlugin(IMainWindow mainwin) : base(mainwin)
     {
     }
@@ -26,6 +71,8 @@ public sealed class LLMChatPlugin : MainPlugin
     public string SettingsPath { get; private set; } = string.Empty;
 
     public string VoiceCacheDirectory { get; private set; } = string.Empty;
+
+    public string PersonalityPath { get; private set; } = string.Empty;
 
     private readonly SemaphoreSlim _speechLock = new(1, 1);
     private bool _toolbarButtonsRegistered;
@@ -43,7 +90,9 @@ public sealed class LLMChatPlugin : MainPlugin
     {
         SettingsPath = Path.Combine(ExtensionValue.BaseDirectory, "LLMChatSetting.json");
         VoiceCacheDirectory = Path.Combine(ExtensionValue.BaseDirectory, "voice-cache");
+        PersonalityPath = Path.Combine(ExtensionValue.BaseDirectory, PersonalityFileName);
         Directory.CreateDirectory(VoiceCacheDirectory);
+        EnsurePersonalityFile();
 
         Settings = LLMChatSettings.LoadOrCreate(SettingsPath);
         ChatClient = new OpenAICompatibleChatClient(Settings);
@@ -89,6 +138,47 @@ public sealed class LLMChatPlugin : MainPlugin
         ChatClient = new OpenAICompatibleChatClient(Settings);
         TextToSpeechClient = TextToSpeechClientFactory.Create(Settings, VoiceCacheDirectory);
         Save();
+    }
+
+    public string BuildLocalPersonalityPrompt()
+    {
+        try
+        {
+            EnsurePersonalityFile();
+            var text = File.ReadAllText(PersonalityPath).Trim();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return string.Empty;
+            }
+
+            if (text.Length > MaxPersonalityPromptLength)
+            {
+                text = text[..MaxPersonalityPromptLength] + "\n...";
+            }
+
+            return $"[本地桌宠人设]\n以下内容来自 {PersonalityFileName}，是桌宠长期性格与行为设定，必须优先遵守：\n{text}";
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to read personality file: {ex}");
+            return string.Empty;
+        }
+    }
+
+    private void EnsurePersonalityFile()
+    {
+        if (string.IsNullOrWhiteSpace(PersonalityPath) || File.Exists(PersonalityPath))
+        {
+            return;
+        }
+
+        var directory = Path.GetDirectoryName(PersonalityPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.WriteAllText(PersonalityPath, DefaultPersonalityPrompt);
     }
 
     private void AddToolbarEntrances()

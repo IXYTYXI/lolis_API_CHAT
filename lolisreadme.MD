@@ -36,6 +36,7 @@ Runtime layout in VPet should be:
 ```text
 VPet/mod/1110_LLMChat/info.lps
 VPet/mod/1110_LLMChat/LLMChatSetting.json
+VPet/mod/1110_LLMChat/LolisPersonality.md
 VPet/mod/1110_LLMChat/plugin/VPet.Plugin.LLMChat.dll
 ```
 
@@ -58,6 +59,8 @@ that directory has held stale DLLs during development.
 - `VPet.Plugin.LLMChat/OpenAICompatibleChatClient.cs`: chat completions client.
 - `VPet.Plugin.LLMChat/OpenAICompatibleTextToSpeechClient.cs`: OpenAI-style TTS.
 - `VPet.Plugin.LLMChat/MiniMaxTextToSpeechClient.cs`: MiniMax HTTP T2A client.
+- `VPet.Plugin.LLMChat/1110_LLMChat/LolisPersonality.md`: local editable pet
+  personality prompt shipped with the mod.
 - `VPet.Plugin.LLMChat/1110_LLMChat/info.lps`: mod metadata.
 - `dist/1110_LLMChat/plugin/VPet.Plugin.LLMChat.dll`: built plugin DLL used for
   manual testing in VPet.
@@ -70,6 +73,38 @@ Chat API settings are OpenAI-compatible:
   provider's documented `/v1` endpoint.
 - Model can be any compatible chat model, for example `minimax-m3-free`.
 - API key can be stored directly or read from `VPET_LLM_API_KEY`.
+
+## Local Pet Personality
+
+This is the file the user originally wanted when asking for a local README-like
+context for the pet:
+
+```text
+VPet/mod/1110_LLMChat/LolisPersonality.md
+```
+
+Source template:
+
+```text
+VPet.Plugin.LLMChat/1110_LLMChat/LolisPersonality.md
+```
+
+Behavior:
+
+- `LLMChatPlugin.LoadPlugin()` sets `PersonalityPath` to this file under the
+  runtime mod directory.
+- If the file is missing, `EnsurePersonalityFile()` writes a default personality
+  template.
+- `LLMChatTalkAPI.BuildPrompt()` calls `BuildLocalPersonalityPrompt()` on every
+  chat request, so edits apply without recompiling.
+- The personality text is prepended before game state and action instructions as
+  `[本地桌宠人设]`.
+- The current read length is capped to 6000 characters to avoid runaway token
+  usage.
+
+The template currently defines 萝莉斯 as a cute, natural, slightly playful
+desktop pet that calls the user 主人, asks before spending money, and avoids
+inventing unavailable goods, jobs, or features.
 
 MiniMax / compatible TTS notes from testing:
 
