@@ -107,6 +107,9 @@ Chat settings:
 - `systemPrompt`: pet persona prompt.
 - `temperature`, `maxTokens`, `keepHistoryTurns`, `timeoutSeconds`.
 - `enableModelActions`: lets the model request whitelisted game actions.
+- `llmWorkMoneyMultiplier`: multiplier applied to the added LLM money-earning
+  jobs. `1.0` is base speed, `2.0` is double income, and values are clamped from
+  `0.1` through `10.0`.
 
 Model actions:
 
@@ -158,6 +161,8 @@ LLM jobs:
 
 - The plugin appends several `LLM` money-earning work entries to VPet's current
   work list at runtime.
+- Their money gain is multiplied by `llmWorkMoneyMultiplier`, configurable in
+  the in-game settings window as `工作收益系数`.
 - Indoor jobs use the current pet's work/coding-style animation when available.
 - Outdoor jobs use the current pet's sleep animation as requested.
 - Earnings still use VPet's normal work formula through `MoneyBase`, duration,

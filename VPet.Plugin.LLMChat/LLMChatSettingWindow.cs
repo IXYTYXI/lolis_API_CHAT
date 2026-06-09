@@ -31,6 +31,7 @@ public sealed class LLMChatSettingWindow : Window
     private readonly TextBox _proxyUrlBox = CreateTextBox();
     private readonly CheckBox _showTokenUsageBox = new() { VerticalAlignment = VerticalAlignment.Center };
     private readonly CheckBox _enableModelActionsBox = new() { VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBox _llmWorkMoneyMultiplierBox = CreateTextBox();
     private readonly CheckBox _enableTtsBox = new() { VerticalAlignment = VerticalAlignment.Center };
     private readonly ComboBox _ttsProviderBox = new() { IsEditable = false, MinHeight = 30 };
     private readonly TextBox _ttsBaseUrlBox = CreateTextBox();
@@ -201,6 +202,7 @@ public sealed class LLMChatSettingWindow : Window
         AddRow(grid, row++, "代理 URL", _proxyUrlBox);
         AddRow(grid, row++, "Token 显示", _showTokenUsageBox);
         AddRow(grid, row++, "模型动作", _enableModelActionsBox);
+        AddRow(grid, row++, "工作收益系数", _llmWorkMoneyMultiplierBox);
         AddSeparator(grid, row++);
         AddRow(grid, row++, "启用 TTS", _enableTtsBox);
         AddRow(grid, row++, "TTS Provider", _ttsProviderBox);
@@ -240,6 +242,7 @@ public sealed class LLMChatSettingWindow : Window
         _proxyUrlBox.Text = settings.ProxyUrl;
         _showTokenUsageBox.IsChecked = settings.ShowTokenUsage;
         _enableModelActionsBox.IsChecked = settings.EnableModelActions;
+        _llmWorkMoneyMultiplierBox.Text = settings.LlmWorkMoneyMultiplier.ToString(CultureInfo.InvariantCulture);
         _enableTtsBox.IsChecked = settings.EnableTextToSpeech;
         var provider = string.IsNullOrWhiteSpace(settings.TtsProvider)
             ? TextToSpeechClientFactory.OpenAICompatibleProvider
@@ -333,6 +336,7 @@ public sealed class LLMChatSettingWindow : Window
 
         settings.ShowTokenUsage = _showTokenUsageBox.IsChecked == true;
         settings.EnableModelActions = _enableModelActionsBox.IsChecked == true;
+        settings.LlmWorkMoneyMultiplier = ReadFloat(_llmWorkMoneyMultiplierBox, "工作收益系数", 0.1f, 10.0f);
         settings.EnableTextToSpeech = _enableTtsBox.IsChecked == true;
         var selectedProvider = (_ttsProviderBox.SelectedItem as string) ?? _ttsProviderBox.Text;
         settings.TtsProvider = string.IsNullOrWhiteSpace(selectedProvider)

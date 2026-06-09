@@ -87,6 +87,8 @@ Chat API settings are OpenAI-compatible:
   provider's documented `/v1` endpoint.
 - Model can be any compatible chat model, for example `minimax-m3-free`.
 - API key can be stored directly or read from `VPET_LLM_API_KEY`.
+- `llmWorkMoneyMultiplier` controls added LLM job income. Default is `2.0`, and
+  the settings window label is `工作收益系数`.
 
 ## Local Pet Personality
 
@@ -190,6 +192,14 @@ All are `GraphHelper.Work.WorkType.Work`, so they earn money rather than EXP.
 They use VPet's normal `Main.FunctionSpend` formula through `MoneyBase`,
 duration, hunger/thirst consumption, and mood consumption; the plugin does not
 directly add money.
+
+Income multiplier:
+
+- `LLMChatSettings.LlmWorkMoneyMultiplier` defaults to `2.0`.
+- The settings window exposes it as `工作收益系数`, clamped to `0.1..10.0`.
+- Saving settings calls `AddLLMWorkDefinitions()` again, which updates existing
+  added work entries in place, so changing the coefficient does not require a
+  game restart.
 
 Animation behavior:
 

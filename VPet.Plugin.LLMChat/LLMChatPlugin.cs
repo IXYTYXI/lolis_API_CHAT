@@ -94,7 +94,6 @@ public sealed class LLMChatPlugin : MainPlugin
     private bool _modConfigMenuRegistered;
     private bool _stateNeedHandlerRegistered;
     private bool _touchSpeechRegistered;
-    private bool _llmWorksRegistered;
     private LLMChatInputWindow? _chatInputWindow;
     private string? _lastShoppingItemName;
     private Food.FoodType? _lastShoppingType;
@@ -176,6 +175,7 @@ public sealed class LLMChatPlugin : MainPlugin
         Settings = settings;
         ChatClient = new OpenAICompatibleChatClient(Settings);
         TextToSpeechClient = TextToSpeechClientFactory.Create(Settings, VoiceCacheDirectory);
+        AddLLMWorkDefinitions();
         Save();
     }
 
@@ -312,11 +312,6 @@ public sealed class LLMChatPlugin : MainPlugin
 
     private void AddLLMWorkDefinitions()
     {
-        if (_llmWorksRegistered)
-        {
-            return;
-        }
-
         try
         {
             var works = MW.Core.Graph.GraphConfig.Works;
@@ -324,15 +319,15 @@ public sealed class LLMChatPlugin : MainPlugin
             var outdoorGraph = ResolveSleepGraphName(indoorGraph);
             foreach (var work in CreateLLMWorkDefinitions(indoorGraph, outdoorGraph))
             {
-                if (works.Any(existing => WorkNameMatches(existing, work.Name)))
+                var existing = works.FirstOrDefault(existing => WorkNameMatches(existing, work.Name));
+                if (existing != null)
                 {
+                    UpdateLLMWorkDefinition(existing, work);
                     continue;
                 }
 
                 works.Add(work);
             }
-
-            _llmWorksRegistered = true;
         }
         catch (Exception ex)
         {
@@ -398,7 +393,7 @@ public sealed class LLMChatPlugin : MainPlugin
         yield return CreateLLMWork(
             "LLM写代码接单",
             indoorGraph,
-            moneyBase: 4.2,
+            moneyBase: 4.2 * GetLLMWorkMoneyMultiplier(),
             strengthFood: 0.75,
             strengthDrink: 0.95,
             feeling: 0.35,
@@ -409,7 +404,7 @@ public sealed class LLMChatPlugin : MainPlugin
         yield return CreateLLMWork(
             "LLM修Bug外包",
             indoorGraph,
-            moneyBase: 5.6,
+            moneyBase: 5.6 * GetLLMWorkMoneyMultiplier(),
             strengthFood: 1.0,
             strengthDrink: 1.15,
             feeling: 0.55,
@@ -420,7 +415,7 @@ public sealed class LLMChatPlugin : MainPlugin
         yield return CreateLLMWork(
             "LLM整理需求文档",
             indoorGraph,
-            moneyBase: 3.6,
+            moneyBase: 3.6 * GetLLMWorkMoneyMultiplier(),
             strengthFood: 0.65,
             strengthDrink: 0.8,
             feeling: 0.25,
@@ -431,7 +426,7 @@ public sealed class LLMChatPlugin : MainPlugin
         yield return CreateLLMWork(
             "LLM户外传单兼职",
             outdoorGraph,
-            moneyBase: 4.8,
+            moneyBase: 4.8 * GetLLMWorkMoneyMultiplier(),
             strengthFood: 1.2,
             strengthDrink: 1.45,
             feeling: 0.45,
@@ -442,7 +437,7 @@ public sealed class LLMChatPlugin : MainPlugin
         yield return CreateLLMWork(
             "LLM户外灵感采风",
             outdoorGraph,
-            moneyBase: 3.9,
+            moneyBase: 3.9 * GetLLMWorkMoneyMultiplier(),
             strengthFood: 1.0,
             strengthDrink: 1.25,
             feeling: 0.15,
@@ -450,6 +445,33 @@ public sealed class LLMChatPlugin : MainPlugin
             minutes: 22,
             finishBonus: 1.05,
             isOutdoor: true);
+    }
+
+    private float GetLLMWorkMoneyMultiplier()
+    {
+        return Math.Clamp(Settings.LlmWorkMoneyMultiplier, 0.1f, 10.0f);
+    }
+
+    private static void UpdateLLMWorkDefinition(GraphHelper.Work target, GraphHelper.Work source)
+    {
+        target.Type = source.Type;
+        target.Name = source.Name;
+        target.Graph = source.Graph;
+        target.MoneyBase = source.MoneyBase;
+        target.StrengthFood = source.StrengthFood;
+        target.StrengthDrink = source.StrengthDrink;
+        target.Feeling = source.Feeling;
+        target.LevelLimit = source.LevelLimit;
+        target.Time = source.Time;
+        target.FinishBonus = source.FinishBonus;
+        target.BorderBrush = source.BorderBrush;
+        target.Background = source.Background;
+        target.ButtonBackground = source.ButtonBackground;
+        target.ButtonForeground = source.ButtonForeground;
+        target.Foreground = source.Foreground;
+        target.Left = source.Left;
+        target.Top = source.Top;
+        target.Width = source.Width;
     }
 
     private static GraphHelper.Work CreateLLMWork(

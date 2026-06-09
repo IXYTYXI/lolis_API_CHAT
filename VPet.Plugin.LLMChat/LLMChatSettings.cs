@@ -37,6 +37,8 @@ public sealed class LLMChatSettings
 
     public bool EnableModelActions { get; set; } = true;
 
+    public float LlmWorkMoneyMultiplier { get; set; } = 2.0f;
+
     public bool EnableTextToSpeech { get; set; }
 
     public string TtsProvider { get; set; } = TextToSpeechClientFactory.OpenAICompatibleProvider;
@@ -89,6 +91,7 @@ public sealed class LLMChatSettings
         ProxyUrl = ProxyUrl,
         ShowTokenUsage = ShowTokenUsage,
         EnableModelActions = EnableModelActions,
+        LlmWorkMoneyMultiplier = LlmWorkMoneyMultiplier,
         EnableTextToSpeech = EnableTextToSpeech,
         TtsProvider = TtsProvider,
         TtsBaseUrl = TtsBaseUrl,
